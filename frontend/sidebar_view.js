@@ -181,9 +181,9 @@ export default {
     },
   },
   methods: {
-    // 是否展开某会话（单封默认展开，多封默认折叠）
+    // 是否展开某会话（默认折叠，点击会话头后展开）
     isThreadExpanded(key) {
-      return this.expandedThreads[key] !== false;
+      return this.expandedThreads[key] === true;
     },
     toast(msg, type) {
       if (typeof window !== "undefined" && window.__jarvisShowToast) {
