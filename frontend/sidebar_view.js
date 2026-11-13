@@ -179,12 +179,12 @@ export default {
       );
       return list;
     },
+  },
+  methods: {
     // 是否展开某会话（单封默认展开，多封默认折叠）
     isThreadExpanded(key) {
       return this.expandedThreads[key] !== false;
     },
-  },
-  methods: {
     toast(msg, type) {
       if (typeof window !== "undefined" && window.__jarvisShowToast) {
         window.__jarvisShowToast(msg, type || "success");
