@@ -92,6 +92,7 @@ export default {
       error: "",
       // 授权
       authInfo: "",
+      mailbox: "",
       // 规则
       rules: [],
       editing: null,
@@ -141,6 +142,14 @@ export default {
       await this.guard(async () => {
         const payload = await callFunction("auth_status", {});
         this.authInfo = this.formatAuth(payload.data || payload);
+        // 自动获取本机邮箱（登录后从 agently-cli +me 读取，无需手动配置）
+        try {
+          const m = await callFunction("get_mailbox", {});
+          const md = m.data || m;
+          this.mailbox = (md && md.mailbox) || "";
+        } catch (e) {
+          this.mailbox = "";
+        }
       });
     },
     async doLogin() {
@@ -266,6 +275,9 @@ export default {
         <button class="jarvis-btn" @click="doLogout" :disabled="loading">登出</button>
       </div>
       <pre style="white-space:pre-wrap;word-break:break-word;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:11px;max-height:300px;overflow:auto;">{{ authInfo }}</pre>
+      <div v-if="mailbox" style="font-size:12px;color:var(--color-text-primary);margin-top:8px;border:1px solid var(--color-border);border-radius:6px;padding:8px;">
+        📧 本机邮箱：<strong>{{ mailbox }}</strong>
+      </div>
       <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;">
         提示：需先安装 agently-cli（npm install -g @tencent-qqmail/agently-cli）并登录。
         若页面内登录无法完成交互，请在终端执行 agently-cli auth login。
@@ -330,18 +342,6 @@ export default {
 
     <!-- 设置 -->
     <div v-if="tab==='settings' && settings">
-      <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;margin-bottom:8px;">
-        <div style="font-weight:bold;margin-bottom:6px;">📧 邮箱信息</div>
-        <div style="margin-bottom:6px;">
-          <label>本机邮箱地址（如 xxx@agent.qq.com）：</label>
-          <input class="jarvis-input" v-model="settings.mailbox" placeholder="xxx@agent.qq.com" style="width:100%;" />
-        </div>
-        <div style="margin-bottom:6px;">
-          <label>邮箱域名（如 agent.qq.com，用于识别本机发件）：</label>
-          <input class="jarvis-input" v-model="settings.mailbox_domain" placeholder="agent.qq.com" style="width:100%;" />
-        </div>
-        <button class="jarvis-btn" @click="saveSettings" :disabled="loading">保存邮箱信息</button>
-      </div>
       <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;">
         <div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
           <label style="display:flex;align-items:center;gap:4px;">

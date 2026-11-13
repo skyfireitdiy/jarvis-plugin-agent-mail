@@ -57,9 +57,6 @@ _DEFAULT_SETTINGS: Dict[str, Any] = {
     "agent_type": "agent",
     "working_dir": os.path.expanduser("~"),
     "auto_reply_whitelist": [],  # 全局自动回复白名单（邮箱地址/域名）
-    # 邮箱账号信息（用户配置，用于发件人识别/白名单匹配/自动回复）
-    "mailbox": "",  # 本机邮箱地址，如 xxx@agent.qq.com
-    "mailbox_domain": "",  # 邮箱域名，如 agent.qq.com
 }
 
 # 防 prompt injection：固定注入到派发提示词末尾的安全声明
@@ -248,6 +245,41 @@ def me() -> Dict[str, Any]:
     return _run_cli(["+me"])
 
 
+def get_mailbox() -> Dict[str, Any]:
+    """自动获取本机邮箱地址与域名（登录后从 agently-cli +me 读取主邮箱）。
+
+    无需用户手动配置：登录成功后即可从账号信息中解析出主邮箱地址与域名。
+    未登录时返回空值并提示。
+    """
+    result = _run_cli(["+me"])
+    if not result.get("success"):
+        return result
+    data = result.get("data", {})
+    # 兼容两层嵌套：{ok, data:{aliases:[...]}} 或 {aliases:[...]}
+    inner = data.get("data") if isinstance(data.get("data"), dict) else data
+    aliases = inner.get("aliases") or []
+    primary = None
+    for alias in aliases:
+        if isinstance(alias, dict) and alias.get("is_primary"):
+            primary = alias
+            break
+    if primary is None and aliases:
+        primary = aliases[0]
+    email = (primary or {}).get("email", "") if isinstance(primary, dict) else ""
+    if not email:
+        return _ok({"mailbox": "", "mailbox_domain": "", "email": "", "name": ""}, "未获取到邮箱地址")
+    domain = email.split("@", 1)[1] if "@" in email else ""
+    return _ok(
+        {
+            "mailbox": email,
+            "mailbox_domain": domain,
+            "email": email,
+            "name": (primary or {}).get("name", ""),
+        },
+        f"本机邮箱: {email}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 邮件
 # ---------------------------------------------------------------------------
@@ -397,7 +429,10 @@ def get_settings() -> Dict[str, Any]:
     settings = dict(_DEFAULT_SETTINGS)
     saved = _read_json(_SETTINGS_FILE, {})
     if isinstance(saved, dict):
-        settings.update(saved)
+        # 只合并仍存在于默认项里的 key，过滤已废弃字段（如 mailbox）
+        for key in _DEFAULT_SETTINGS:
+            if key in saved:
+                settings[key] = saved[key]
     return _ok(settings)
 
 
@@ -409,7 +444,10 @@ def update_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(_DEFAULT_SETTINGS)
         saved = _read_json(_SETTINGS_FILE, {})
         if isinstance(saved, dict):
-            current.update(saved)
+            # 只保留仍存在于默认项里的 key，过滤已废弃字段（如 mailbox）
+            for key in _DEFAULT_SETTINGS:
+                if key in saved:
+                    current[key] = saved[key]
         for key, value in settings.items():
             if key in _DEFAULT_SETTINGS:
                 current[key] = value
@@ -961,6 +999,7 @@ PUBLIC_FUNCTIONS: List[str] = [
     "auth_login",
     "auth_logout",
     "me",
+    "get_mailbox",
     # 邮件
     "list_messages",
     "read_message",
