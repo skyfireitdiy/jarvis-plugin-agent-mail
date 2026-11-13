@@ -5,6 +5,27 @@
 
 const PLUGIN = "agent-mail";
 
+// 规范化主题：去掉 Re:/Fw:/Fwd:/回复:/转发: 等前缀（可重复嵌套），用于会话归组
+function normalizeSubject(subject) {
+  let s = String(subject || "").trim();
+  let prev = null;
+  while (prev !== s) {
+    prev = s;
+    s = s
+      .replace(/^(re|fw|fwd|回复|答复|转发|转交|自动回复)\s*[:：]\s*/i, "")
+      .replace(/^\s*\[[^\]]*\]\s*/, "")
+      .trim();
+  }
+  return s;
+}
+// 会话归组：同联系人（发件人邮箱）+ 同主题（去前缀）视为一个会话
+function threadContact(m) {
+  return (m && m.from_email) || (m && m.from) || (m && m.sender) || "unknown";
+}
+function threadKey(m) {
+  return normalizeSubject(m.subject) + "\u0000" + String(threadContact(m)).toLowerCase();
+}
+
 // 解析 gateway 地址（与 App.vue 一致）
 function parseGatewayAddress(address) {
   address = (address || "").trim();
@@ -99,6 +120,8 @@ export default {
       page: 1,
       pageSize: 20,
       searchQuery: "",
+      // 会话（按主题+联系人归组）展开状态
+      expandedThreads: {},
       // 留痕
       history: [],
       // 待确认
@@ -128,6 +151,35 @@ export default {
         return text || raw;
       }
       return raw;
+    },
+    // 会话分组：同联系人+同主题（去前缀）归为一组，按最新邮件时间倒序
+    threads() {
+      const groups = new Map();
+      for (const m of this.messages) {
+        const key = threadKey(m);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(m);
+      }
+      const list = [];
+      for (const [key, msgs] of groups) {
+        msgs.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        list.push({
+          key,
+          subject: normalizeSubject(msgs[0].subject),
+          contact: threadContact(msgs[0]),
+          messages: msgs,
+          count: msgs.length,
+          latest: msgs[0],
+        });
+      }
+      list.sort((a, b) =>
+        String(b.latest.created_at || "").localeCompare(String(a.latest.created_at || "")),
+      );
+      return list;
+    },
+    // 是否展开某会话（单封默认展开，多封默认折叠）
+    isThreadExpanded(key) {
+      return this.expandedThreads[key] !== false;
     },
   },
   methods: {
@@ -222,6 +274,9 @@ export default {
     async refresh() {
       await this.switchTab(this.tab);
     },
+    toggleThread(key) {
+      this.expandedThreads[key] = !this.isThreadExpanded(key);
+    },
   },
   mounted() {
     this.loadMessages();
@@ -259,12 +314,32 @@ export default {
         </div>
       </div>
       <div v-else>
-        <div v-if="messages.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无邮件</div>
-        <div v-for="m in messages" :key="m.id" @click="openMessage(m)"
-             style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;cursor:pointer;">
-          <div style="font-size:12px;font-weight:bold;">{{ m.subject || '（无主题）' }}</div>
-          <div style="font-size:11px;color:var(--color-text-secondary);">{{ m.sender || m.from || '未知' }}</div>
-          <div style="font-size:11px;color:var(--color-text-secondary);">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>
+        <div v-if="threads.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无邮件</div>
+        <div v-for="t in threads" :key="t.key" style="border:1px solid var(--color-border);border-radius:6px;margin-bottom:6px;overflow:hidden;">
+          <!-- 会话头 -->
+          <div @click="toggleThread(t.key)" style="padding:6px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:6px;">
+            <div style="min-width:0;">
+              <div style="font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                {{ t.subject || '（无主题）' }}
+                <span v-if="t.count>1" style="color:var(--color-text-secondary);font-weight:normal;"> ({{ t.count }})</span>
+              </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                {{ t.contact }} · {{ (t.latest.snippet || t.latest.body || '').slice(0, 60) }}
+              </div>
+            </div>
+            <span style="font-size:11px;color:var(--color-text-secondary);flex-shrink:0;">{{ isThreadExpanded(t.key) ? '▾' : '▸' }}</span>
+          </div>
+          <!-- 会话内邮件列表 -->
+          <div v-if="isThreadExpanded(t.key)">
+            <div v-for="m in t.messages" :key="m.id" @click.stop="openMessage(m)"
+                 style="padding:5px 6px 5px 16px;border-top:1px dashed var(--color-border);cursor:pointer;">
+              <div style="font-size:11px;color:var(--color-text-secondary);">
+                {{ m.sender || m.from || '未知' }}
+                <span v-if="t.count>1" style="float:right;">{{ m.created_at || '' }}</span>
+              </div>
+              <div style="font-size:11px;">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
