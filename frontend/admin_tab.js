@@ -260,6 +260,7 @@ export default {
       <strong>⚙️ Agent Mail 管理</strong>
     </div>
     <div style="margin-bottom:8px;display:flex;gap:6px;">
+      <button class="jarvis-btn" :class="tab==='guide'?'jarvis-btn-primary':''" @click="tab='guide'">使用指南</button>
       <button class="jarvis-btn" :class="tab==='auth'?'jarvis-btn-primary':''" @click="switchTab('auth')">授权</button>
       <button class="jarvis-btn" :class="tab==='rules'?'jarvis-btn-primary':''" @click="switchTab('rules')">规则</button>
       <button class="jarvis-btn" :class="tab==='settings'?'jarvis-btn-primary':''" @click="switchTab('settings')">设置</button>

@@ -52,9 +52,9 @@ _SEEN_FILE = os.path.join(_DATA_DIR, "seen.json")
 # 默认设置
 _DEFAULT_SETTINGS: Dict[str, Any] = {
     "poll_enabled": False,  # 是否开启后台轮询（默认关闭，需用户显式开启）
-    "poll_interval_seconds": 300,
+    # 轮询间隔：默认 30s，保证邮件到达后最长 30 秒内被 Agent 处理
+    "poll_interval_seconds": 30,
     "max_new_messages": 20,
-    "agent_type": "agent",
     "working_dir": os.path.expanduser("~"),
     "auto_reply_whitelist": [],  # 全局自动回复白名单（邮箱地址/域名）
 }
@@ -70,6 +70,13 @@ _WRITE_COMMANDS = ("send", "reply", "forward", "trash", "delete")
 
 # 进程内写锁（数据文件并发读写）
 _LOCK = threading.RLock()
+
+# 后台轮询线程：勾选"启用后台轮询"后常驻，按 poll_interval_seconds 周期拉取新邮件。
+# 注意：gateway 每次调用插件功能都会重新 exec_module 加载本模块（node_manager.py
+# _load_plugin_api 无缓存），因此模块级变量在每次调用间不保留。线程的启动去重
+# 依赖线程名（threading.enumerate 遍历），退出依赖轮询 settings.json 的 poll_enabled，
+# 均不依赖模块级状态。线程为 daemon，不阻塞进程退出。
+_POLL_THREAD_NAME = "agent-mail-poll"
 
 # CLI 可用性短时缓存（TTL 30s，避免每次调用都跑 shutil.which；
 # 安装/升级 CLI 后无需重启进程，最多 30s 自动生效）
@@ -556,7 +563,10 @@ def get_settings() -> Dict[str, Any]:
 
 
 def update_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """更新插件设置。"""
+    """更新插件设置。
+
+    保存后按 poll_enabled 自动启动/停止后台轮询线程，无需用户另建定时任务。
+    """
     if not isinstance(settings, dict):
         return _err("settings 必须是对象", "INVALID_ARGUMENT")
     with _LOCK:
@@ -571,6 +581,11 @@ def update_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             if key in _DEFAULT_SETTINGS:
                 current[key] = value
         _write_json(_SETTINGS_FILE, current)
+    # 按 poll_enabled 启停后台轮询线程（在锁外执行，避免持锁期间阻塞）
+    if current.get("poll_enabled", False):
+        _ensure_poll_thread()
+    else:
+        _stop_poll_thread()
     return _ok(current, "设置已更新")
 
 
@@ -1005,7 +1020,8 @@ def _spawn_agent(task: str, message_id: str, rule: Dict[str, Any]) -> Dict[str, 
         return _err("无法获取 AgentManager，Agent 派发失败", "AGENT_MANAGER_UNAVAILABLE")
 
     settings = get_settings().get("data", _DEFAULT_SETTINGS)
-    agent_type = settings.get("agent_type", "agent")
+    # 类型固定为通用 Agent（管理员规定，不开放配置）
+    agent_type = "agent"
     working_dir = settings.get("working_dir", os.path.expanduser("~"))
     auth_token = os.environ.get("JARVIS_AUTH_TOKEN", "")
 
@@ -1105,6 +1121,125 @@ def poll_new_messages() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 后台轮询线程
+# ---------------------------------------------------------------------------
+
+
+def _poll_worker() -> None:
+    """后台轮询线程主循环：按 poll_interval_seconds 周期调 poll_new_messages。
+
+    每次轮询间隔从最新设置读取，支持运行时调整间隔；每次轮询前检查
+    settings.poll_enabled，关闭后线程自行退出（不依赖模块级状态，兼容
+    gateway 每次调用都重新加载模块的机制）。轮询异常不抛出（记录到留痕），
+    保证线程不因单次失败而退出。
+    """
+    while True:
+        # 先等待一个周期再轮询：避免开启瞬间立即触发，给设置生效留缓冲
+        interval = _get_poll_interval()
+        time.sleep(interval)
+        settings = get_settings().get("data", _DEFAULT_SETTINGS)
+        if not settings.get("poll_enabled", False):
+            break
+        try:
+            poll_new_messages()
+        except Exception as exc:  # noqa: BLE001 - 后台线程必须兜底
+            try:
+                _append_history(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "kind": "poll_error",
+                        "message_id": "",
+                        "rule_id": "",
+                        "rule_name": "",
+                        "mode": "",
+                        "status": "error",
+                        "created_at": _now(),
+                        "detail": f"后台轮询异常：{exc}",
+                    }
+                )
+            except Exception:
+                pass
+
+
+def _get_poll_interval() -> float:
+    """读取当前轮询间隔（秒），非法值回退默认 30s。"""
+    try:
+        settings = get_settings().get("data", _DEFAULT_SETTINGS)
+        interval = float(settings.get("poll_interval_seconds", 30))
+        return max(1.0, min(interval, 3600.0))
+    except Exception:
+        return 30.0
+
+
+def _poll_thread_alive() -> bool:
+    """后台轮询线程是否在运行（按线程名检测，兼容模块重载）。"""
+    for t in threading.enumerate():
+        if t.name == _POLL_THREAD_NAME and t.is_alive():
+            return True
+    return False
+
+
+def _is_agent_process() -> bool:
+    """是否为 Agent 进程（而非 gateway master）。
+
+    Jarvis 框架用环境变量 IS_AGENT_PROCESS=1 标记 Agent 进程
+    （code_agent.py / jarvis.py 在启动 web-gateway 时设置；master gateway 不设置）。
+    Agent 进程不应创建后台轮询线程，避免与 gateway master 重复轮询/重复派发。
+    """
+    return os.environ.get("IS_AGENT_PROCESS") == "1"
+
+
+def _ensure_poll_thread() -> None:
+    """确保后台轮询线程在运行（幂等：已在运行则跳过）。
+
+    仅 gateway master 进程创建轮询线程；Agent 进程不创建，
+    避免两个进程重复轮询同一邮箱导致重复派发。
+    """
+    if _is_agent_process():
+        return
+    if _poll_thread_alive():
+        return
+    thread = threading.Thread(
+        target=_poll_worker,
+        name=_POLL_THREAD_NAME,
+        daemon=True,
+    )
+    thread.start()
+
+
+def _stop_poll_thread() -> None:
+    """停止后台轮询线程。
+
+    通过写 settings（poll_enabled=false）让线程在下一个周期自行退出；
+    不直接杀线程，避免重载后无法引用旧线程对象。
+    """
+    with _LOCK:
+        current = dict(_DEFAULT_SETTINGS)
+        saved = _read_json(_SETTINGS_FILE, {})
+        if isinstance(saved, dict):
+            for key in _DEFAULT_SETTINGS:
+                if key in saved:
+                    current[key] = saved[key]
+        current["poll_enabled"] = False
+        _write_json(_SETTINGS_FILE, current)
+
+
+def _auto_start_poll_thread() -> None:
+    """模块加载时自动恢复后台轮询线程（幂等）。
+
+    gateway 每次调用插件功能都会重新加载本模块，因此每次加载都要检查
+    settings：若 poll_enabled=true 且线程未在运行，则启动线程。这样
+    gateway 重启后也能自动恢复轮询，无需用户重新勾选。
+    """
+    try:
+        settings = get_settings().get("data", _DEFAULT_SETTINGS)
+        if settings.get("poll_enabled", False):
+            _ensure_poll_thread()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # 公开功能白名单（gateway 只允许调用这些函数）
 # ---------------------------------------------------------------------------
 
@@ -1141,3 +1276,7 @@ PUBLIC_FUNCTIONS: List[str] = [
     # 自动处理
     "poll_new_messages",
 ]
+
+# 模块加载时自动恢复后台轮询线程（幂等：gateway 每次调用都会重新加载本模块，
+# 这里确保 poll_enabled=true 时线程始终在跑，gateway 重启后也能自动恢复）。
+_auto_start_poll_thread()
