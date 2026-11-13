@@ -1,0 +1,20 @@
+# Jarvis 工作目录（会话/任务列表等，不应提交）
+.jarvis/
+.jarviscache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+
+# 插件本地数据（规则/历史/待确认队列/授权状态）
+data/
+
+# 系统
+.DS_Store
+*.log
