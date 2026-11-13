@@ -255,8 +255,8 @@ export default {
       <button class="jarvis-btn" :class="tab==='rules'?'jarvis-btn-primary':''" @click="switchTab('rules')">规则</button>
       <button class="jarvis-btn" :class="tab==='settings'?'jarvis-btn-primary':''" @click="switchTab('settings')">设置</button>
     </div>
-    <div v-if="error" class="jarvis-alert" style="color:#d33;font-size:12px;margin-bottom:8px;">{{ error }}</div>
-    <div v-if="loading" style="color:#888;font-size:12px;">加载中…</div>
+    <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
+    <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
 
     <!-- 授权 -->
     <div v-if="tab==='auth'">
@@ -265,8 +265,8 @@ export default {
         <button class="jarvis-btn" @click="doLogin" :disabled="loading">登录</button>
         <button class="jarvis-btn" @click="doLogout" :disabled="loading">登出</button>
       </div>
-      <pre style="white-space:pre-wrap;word-break:break-word;background:#f5f5f5;border-radius:6px;padding:8px;font-size:11px;max-height:300px;overflow:auto;">{{ authInfo }}</pre>
-      <div style="font-size:11px;color:#888;margin-top:6px;">
+      <pre style="white-space:pre-wrap;word-break:break-word;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:11px;max-height:300px;overflow:auto;">{{ authInfo }}</pre>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;">
         提示：需先安装 agently-cli（npm install -g @tencent-qqmail/agently-cli）并登录。
         若页面内登录无法完成交互，请在终端执行 agently-cli auth login。
       </div>
@@ -274,25 +274,25 @@ export default {
 
     <!-- 规则 -->
     <div v-if="tab==='rules'">
-      <div style="font-size:12px;color:#666;margin-bottom:6px;">自动处理规则（触发条件 + 提示词模板 + 自动回复开关）</div>
-      <div v-for="r in rules" :key="r.id" style="border:1px solid #eee;border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;">
+      <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:6px;">自动处理规则（触发条件 + 提示词模板 + 自动回复开关）</div>
+      <div v-for="r in rules" :key="r.id" style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <strong>{{ r.name }}</strong>
           <span>
-            <span style="color:#888;">[{{ r.trigger_type }}{{ r.trigger_value ? ':' + r.trigger_value : '' }}]</span>
-            <span style="color:#666;"> {{ r.mode }}</span>
-            <span v-if="r.auto_reply" style="color:#080;"> 自动回复开</span>
-            <span v-else style="color:#888;"> 自动回复关</span>
+            <span style="color:var(--color-text-secondary);">[{{ r.trigger_type }}{{ r.trigger_value ? ':' + r.trigger_value : '' }}]</span>
+            <span style="color:var(--color-text-secondary);"> {{ r.mode }}</span>
+            <span v-if="r.auto_reply" style="color:var(--color-success);"> 自动回复开</span>
+            <span v-else style="color:var(--color-text-secondary);"> 自动回复关</span>
           </span>
         </div>
-        <div style="color:#666;margin-top:4px;">{{ r.prompt_template.slice(0, 80) }}{{ r.prompt_template.length > 80 ? '…' : '' }}</div>
+        <div style="color:var(--color-text-secondary);margin-top:4px;">{{ r.prompt_template.slice(0, 80) }}{{ r.prompt_template.length > 80 ? '…' : '' }}</div>
         <div style="display:flex;gap:6px;margin-top:6px;">
           <button class="jarvis-btn" @click="editRule(r)">编辑</button>
           <button class="jarvis-btn" @click="removeRule(r)">删除</button>
         </div>
       </div>
 
-      <div style="border:1px solid #ddd;border-radius:6px;padding:8px;margin-top:8px;">
+      <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;margin-top:8px;">
         <div style="font-size:12px;font-weight:bold;margin-bottom:6px;">{{ editing ? '编辑规则' : '新建规则' }}</div>
         <input class="jarvis-input" v-model="(editing||newRule).name" placeholder="规则名称（必填）" style="width:100%;margin-bottom:6px;" />
         <div style="display:flex;gap:6px;margin-bottom:6px;">
@@ -330,7 +330,7 @@ export default {
 
     <!-- 设置 -->
     <div v-if="tab==='settings' && settings">
-      <div style="border:1px solid #ddd;border-radius:6px;padding:8px;font-size:12px;margin-bottom:8px;">
+      <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;margin-bottom:8px;">
         <div style="font-weight:bold;margin-bottom:6px;">📧 邮箱信息</div>
         <div style="margin-bottom:6px;">
           <label>本机邮箱地址（如 xxx@agent.qq.com）：</label>
@@ -342,7 +342,7 @@ export default {
         </div>
         <button class="jarvis-btn" @click="saveSettings" :disabled="loading">保存邮箱信息</button>
       </div>
-      <div style="border:1px solid #ddd;border-radius:6px;padding:8px;font-size:12px;">
+      <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;">
         <div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
           <label style="display:flex;align-items:center;gap:4px;">
             <input type="checkbox" v-model="settings.poll_enabled" /> 启用后台轮询
@@ -362,7 +362,7 @@ export default {
         </div>
         <button class="jarvis-btn jarvis-btn-primary" @click="saveSettings" :disabled="loading">保存设置</button>
       </div>
-      <div style="font-size:11px;color:#888;margin-top:6px;">
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;">
         安全提示：自动回复默认关闭；回复范围默认仅回原发件人；白名单可限制自动回复对象。
       </div>
     </div>

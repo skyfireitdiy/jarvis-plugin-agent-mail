@@ -218,8 +218,8 @@ export default {
       <button class="jarvis-btn" :class="tab==='history'?'jarvis-btn-primary':''" @click="switchTab('history')">留痕</button>
       <button class="jarvis-btn" :class="tab==='pending'?'jarvis-btn-primary':''" @click="switchTab('pending')">待确认</button>
     </div>
-    <div v-if="error" class="jarvis-alert" style="color:#d33;font-size:12px;margin-bottom:8px;">{{ error }}</div>
-    <div v-if="loading" style="color:#888;font-size:12px;">加载中…</div>
+    <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
+    <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
 
     <!-- 收件箱 -->
     <div v-if="tab==='inbox'">
@@ -229,43 +229,43 @@ export default {
       </div>
       <div v-if="selected">
         <button class="jarvis-btn" @click="selected=null" style="margin-bottom:6px;">← 返回列表</button>
-        <div style="border:1px solid #ddd;border-radius:6px;padding:8px;font-size:12px;">
+        <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;">
           <div><strong>{{ selected.subject || '（无主题）' }}</strong></div>
-          <div style="color:#666;">发件人：{{ selected.sender || selected.from || '未知' }}</div>
-          <div style="color:#888;">ID：{{ selected.id }}</div>
-          <div v-if="selected.attachments && selected.attachments.length" style="color:#888;">
+          <div style="color:var(--color-text-secondary);">发件人：{{ selected.sender || selected.from || '未知' }}</div>
+          <div style="color:var(--color-text-secondary);">ID：{{ selected.id }}</div>
+          <div v-if="selected.attachments && selected.attachments.length" style="color:var(--color-text-secondary);">
             附件：{{ selected.attachments.map(a => a.name || a.filename).join('、') }}
           </div>
           <pre style="white-space:pre-wrap;word-break:break-word;margin-top:6px;font-family:inherit;">{{ selectedBody }}</pre>
         </div>
       </div>
       <div v-else>
-        <div v-if="messages.length===0" style="color:#888;font-size:12px;">暂无邮件</div>
+        <div v-if="messages.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无邮件</div>
         <div v-for="m in messages" :key="m.id" @click="openMessage(m)"
-             style="border:1px solid #eee;border-radius:6px;padding:6px;margin-bottom:6px;cursor:pointer;">
+             style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;cursor:pointer;">
           <div style="font-size:12px;font-weight:bold;">{{ m.subject || '（无主题）' }}</div>
-          <div style="font-size:11px;color:#666;">{{ m.sender || m.from || '未知' }}</div>
-          <div style="font-size:11px;color:#999;">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>
+          <div style="font-size:11px;color:var(--color-text-secondary);">{{ m.sender || m.from || '未知' }}</div>
+          <div style="font-size:11px;color:var(--color-text-secondary);">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>
         </div>
       </div>
     </div>
 
     <!-- 留痕 -->
     <div v-if="tab==='history'">
-      <div v-if="history.length===0" style="color:#888;font-size:12px;">暂无处理留痕</div>
-      <div v-for="h in history" :key="h.id" style="border:1px solid #eee;border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;">
-        <div><strong>{{ h.rule_name || h.kind }}</strong> <span style="color:#888;">[{{ h.status || h.kind }}]</span></div>
-        <div style="color:#666;">{{ h.created_at }} · {{ h.detail || '' }}</div>
+      <div v-if="history.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无处理留痕</div>
+      <div v-for="h in history" :key="h.id" style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;">
+        <div><strong>{{ h.rule_name || h.kind }}</strong> <span style="color:var(--color-text-secondary);">[{{ h.status || h.kind }}]</span></div>
+        <div style="color:var(--color-text-secondary);">{{ h.created_at }} · {{ h.detail || '' }}</div>
       </div>
     </div>
 
     <!-- 待确认 -->
     <div v-if="tab==='pending'">
-      <div v-if="pending.length===0" style="color:#888;font-size:12px;">暂无待确认任务</div>
-      <div v-for="p in pending" :key="p.id" style="border:1px solid #eee;border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;">
+      <div v-if="pending.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无待确认任务</div>
+      <div v-for="p in pending" :key="p.id" style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;">
         <div><strong>{{ p.subject || '（无主题）' }}</strong></div>
-        <div style="color:#666;">发件人：{{ p.sender || '未知' }} · 规则：{{ p.rule_name || '-' }}</div>
-        <div style="color:#999;">{{ p.created_at }}</div>
+        <div style="color:var(--color-text-secondary);">发件人：{{ p.sender || '未知' }} · 规则：{{ p.rule_name || '-' }}</div>
+        <div style="color:var(--color-text-secondary);">{{ p.created_at }}</div>
         <div style="display:flex;gap:6px;margin-top:6px;">
           <button class="jarvis-btn" @click="resolvePending(p,'approve')">批准</button>
           <button class="jarvis-btn" @click="resolvePending(p,'reject')">拒绝</button>

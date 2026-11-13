@@ -228,10 +228,10 @@ export default {
       <button class="jarvis-btn" :class="tab==='forward'?'jarvis-btn-primary':''" @click="tab='forward'">转发</button>
       <button class="jarvis-btn" :class="tab==='manage'?'jarvis-btn-primary':''" @click="tab='manage'">管理</button>
     </div>
-    <div v-if="error" class="jarvis-alert" style="color:#d33;font-size:12px;margin-bottom:8px;">{{ error }}</div>
-    <div v-if="loading" style="color:#888;font-size:12px;">执行中…</div>
+    <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
+    <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">执行中…</div>
 
-    <div style="margin-bottom:8px;font-size:12px;color:#666;">
+    <div style="margin-bottom:8px;font-size:12px;color:var(--color-text-secondary);">
       <label style="display:flex;align-items:center;gap:6px;">
         <input type="checkbox" v-model="confirmed" /> 我已确认此操作（免除 confirmation-token）
       </label>
@@ -262,11 +262,11 @@ export default {
 
     <!-- 管理 -->
     <div v-if="tab==='manage'">
-      <div style="font-size:12px;color:#666;margin-bottom:6px;">最近邮件（点击填入 message_id）：</div>
+      <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:6px;">最近邮件（点击填入 message_id）：</div>
       <div v-for="m in messages" :key="m.id" @click="messageId=m.id"
-           style="border:1px solid #eee;border-radius:6px;padding:6px;margin-bottom:6px;cursor:pointer;font-size:12px;">
+           style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;cursor:pointer;font-size:12px;">
         <div><strong>{{ m.subject || '（无主题）' }}</strong></div>
-        <div style="color:#666;">{{ m.sender || m.from || '未知' }} · {{ m.id }}</div>
+        <div style="color:var(--color-text-secondary);">{{ m.sender || m.from || '未知' }} · {{ m.id }}</div>
       </div>
       <div style="margin-top:8px;">
         <input class="jarvis-input" v-model="messageId" placeholder="message_id" style="width:100%;margin-bottom:6px;" />
@@ -277,7 +277,7 @@ export default {
       </div>
     </div>
 
-    <pre v-if="result" style="white-space:pre-wrap;word-break:break-word;background:#f5f5f5;border-radius:6px;padding:8px;margin-top:8px;font-size:11px;max-height:200px;overflow:auto;">{{ result }}</pre>
+    <pre v-if="result" style="white-space:pre-wrap;word-break:break-word;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;max-height:200px;overflow:auto;">{{ result }}</pre>
   </div>
   `,
 };
