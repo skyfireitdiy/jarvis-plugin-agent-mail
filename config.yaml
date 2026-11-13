@@ -24,11 +24,6 @@ frontend:
       title: "邮件收件箱"
       entry: sidebar_view.js
       icon: frontend/icon.svg
-  tool_panels:
-    - id: agentmail-tool
-      title: "Agent 邮件"
-      entry: tool_panel.js
-      icon: frontend/icon.svg
 capabilities:
   - name: "邮件收发与搜索"
     description: "通过 agently-cli 收发/搜索/回复/转发/删除邮件，下载附件"

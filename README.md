@@ -21,7 +21,7 @@ agent-mail/
 ├── plugin/api.py        # 插件私有功能层（gateway 侧，前端代理调用，不暴露给 Agent）
 ├── timer_actions/       # 定时轮询动作（agent_mail_poll）
 ├── tools/               # Agent 工具（mail_tool / mail_rules）
-├── frontend/            # 前端扩展（sidebar_view / tool_panel / admin_tab）
+├── frontend/            # 前端扩展（sidebar_view / admin_tab）
 └── rules/               # 规则（agent_mail_rule，YAML front matter）
 ```
 
@@ -48,7 +48,7 @@ agently-cli auth login
 ## 使用
 
 - **收件箱**：侧边栏「Agent Mail」浏览/搜索邮件、查看处理留痕与待确认队列
-- **邮件工具**：工具面板「Agent Mail 工具」手动发送/回复/转发/回收站/删除
+- **邮件工具**：侧边栏「Agent Mail → 工具」手动发送/回复/转发/回收站/删除
 - **管理设置**：管理页「Agent Mail 管理」授权管理、规则 CRUD、轮询开关与白名单
 - **自动处理**：配置规则并开启后台轮询后，新邮件将按规则自动派发 Agent 或进入待确认队列
 

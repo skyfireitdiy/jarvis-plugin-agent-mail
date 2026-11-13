@@ -111,15 +111,30 @@ export default {
   },
   data() {
     return {
+      // 紧凑按钮样式（参考其他插件，避免浏览器默认大按钮）
+      btnBase:
+        "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
+      btnPrimary:
+        "padding:4px 10px;background:var(--color-accent);color:#060911;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;",
+      btnDanger:
+        "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-error);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
       loading: false,
       error: "",
-      tab: "inbox", // inbox / history / pending
+      tab: "inbox", // inbox / history / pending / tools
+      toolTab: "send", // send / reply / forward / manage（工具面板内部）
       // 收件箱
       messages: [],
       selected: null,
       page: 1,
       pageSize: 20,
       searchQuery: "",
+      // 工具（发送/回复/转发/管理）
+      to: "",
+      subject: "",
+      body: "",
+      messageId: "",
+      confirmed: false,
+      result: "",
       // 会话（按主题+联系人归组）展开状态
       expandedThreads: {},
       // 留痕
@@ -201,7 +216,7 @@ export default {
         this.loading = false;
       }
     },
-    async loadMessages() {
+    async loadMessages(silent) {
       await this.guard(async () => {
         const payload = await callFunction("list_messages", {
           page: this.page,
@@ -209,7 +224,7 @@ export default {
         });
         const data = payload.data || {};
         this.messages = data.messages || data.items || data.list || [];
-        if (this.messages.length === 0 && this.error === "") {
+        if (!silent && this.messages.length === 0 && this.error === "") {
           this.error =
             "收件箱为空，或未安装 agently-cli / 未登录。请先在管理设置中检查授权状态。";
         }
@@ -276,8 +291,94 @@ export default {
     async refresh() {
       await this.switchTab(this.tab);
     },
+    async openManage() {
+      this.toolTab = "manage";
+      if (this.messages.length === 0) await this.loadMessages(true);
+    },
     toggleThread(key) {
       this.expandedThreads[key] = !this.isThreadExpanded(key);
+    },
+    // ---- 工具：发送/回复/转发/管理 ----
+    async doSend() {
+      if (!this.to.trim()) {
+        this.error = "请填写收件人";
+        return;
+      }
+      await this.guard(async () => {
+        const payload = await callFunction("send_message", {
+          to: this.to.trim(),
+          subject: this.subject,
+          body: this.body,
+          confirmed: this.confirmed,
+        });
+        this.result = JSON.stringify(payload.data || payload, null, 2);
+        this.toast("邮件已发送");
+      });
+    },
+    async doReply() {
+      if (!this.messageId.trim() || !this.body.trim()) {
+        this.error = "请填写 message_id 与回复正文";
+        return;
+      }
+      await this.guard(async () => {
+        const payload = await callFunction("reply_message", {
+          message_id: this.messageId.trim(),
+          body: this.body,
+          confirmed: this.confirmed,
+        });
+        this.result = JSON.stringify(payload.data || payload, null, 2);
+        this.toast("回复已发送");
+      });
+    },
+    async doForward() {
+      if (!this.messageId.trim() || !this.to.trim()) {
+        this.error = "请填写 message_id 与收件人";
+        return;
+      }
+      await this.guard(async () => {
+        const payload = await callFunction("forward_message", {
+          message_id: this.messageId.trim(),
+          to: this.to.trim(),
+          body: this.body,
+          confirmed: this.confirmed,
+        });
+        this.result = JSON.stringify(payload.data || payload, null, 2);
+        this.toast("邮件已转发");
+      });
+    },
+    async doTrash() {
+      if (!this.messageId.trim()) {
+        this.error = "请填写 message_id";
+        return;
+      }
+      await this.guard(async () => {
+        const payload = await callFunction("trash_message", {
+          message_id: this.messageId.trim(),
+          confirmed: this.confirmed,
+        });
+        this.result = JSON.stringify(payload.data || payload, null, 2);
+        this.toast("邮件已移入回收站");
+      });
+    },
+    async doDelete() {
+      if (!this.messageId.trim()) {
+        this.error = "请填写 message_id";
+        return;
+      }
+      const ok = window.__jarvisConfirm
+        ? await window.__jarvisConfirm("永久删除该邮件？此操作不可恢复！", {
+            defaultConfirm: false,
+          })
+        : confirm("永久删除该邮件？此操作不可恢复！");
+      if (!ok) return;
+      await this.guard(async () => {
+        const payload = await callFunction("delete_message", {
+          message_id: this.messageId.trim(),
+          confirmed: this.confirmed,
+        });
+        this.result = JSON.stringify(payload.data || payload, null, 2);
+        this.toast("邮件已删除");
+      });
     },
   },
   mounted() {
@@ -287,12 +388,13 @@ export default {
   <div class="agent-mail-sidebar" style="height:100%;overflow-y:auto;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <strong>📬 Agent Mail</strong>
-      <button class="jarvis-btn" @click="refresh" :disabled="loading">刷新</button>
+      <button :style="btnBase" @click="refresh" :disabled="loading">刷新</button>
     </div>
-    <div style="margin-bottom:8px;display:flex;gap:6px;">
-      <button class="jarvis-btn" :class="tab==='inbox'?'jarvis-btn-primary':''" @click="switchTab('inbox')">收件箱</button>
-      <button class="jarvis-btn" :class="tab==='history'?'jarvis-btn-primary':''" @click="switchTab('history')">留痕</button>
-      <button class="jarvis-btn" :class="tab==='pending'?'jarvis-btn-primary':''" @click="switchTab('pending')">待确认</button>
+    <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;">
+      <button :style="tab==='inbox'?btnPrimary:btnBase" @click="switchTab('inbox')">收件箱</button>
+      <button :style="tab==='history'?btnPrimary:btnBase" @click="switchTab('history')">留痕</button>
+      <button :style="tab==='pending'?btnPrimary:btnBase" @click="switchTab('pending')">待确认</button>
+      <button :style="tab==='tools'?btnPrimary:btnBase" @click="switchTab('tools')">工具</button>
     </div>
     <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
     <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
@@ -301,10 +403,10 @@ export default {
     <div v-if="tab==='inbox'">
       <div style="display:flex;gap:6px;margin-bottom:8px;">
         <input class="jarvis-input" v-model="searchQuery" placeholder="搜索邮件…" @keyup.enter="search" style="flex:1;" />
-        <button class="jarvis-btn" @click="search">搜索</button>
+        <button :style="btnBase" @click="search">搜索</button>
       </div>
       <div v-if="selected">
-        <button class="jarvis-btn" @click="selected=null" style="margin-bottom:6px;">← 返回列表</button>
+        <button :style="btnBase" @click="selected=null" style="margin-bottom:6px;">← 返回列表</button>
         <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;">
           <div><strong>{{ selected.subject || '（无主题）' }}</strong></div>
           <div style="color:var(--color-text-secondary);">发件人：{{ selected.sender || selected.from || '未知' }}</div>
@@ -363,10 +465,102 @@ export default {
         <div style="color:var(--color-text-secondary);">发件人：{{ p.sender || '未知' }} · 规则：{{ p.rule_name || '-' }}</div>
         <div style="color:var(--color-text-secondary);">{{ p.created_at }}</div>
         <div style="display:flex;gap:6px;margin-top:6px;">
-          <button class="jarvis-btn" @click="resolvePending(p,'approve')">批准</button>
-          <button class="jarvis-btn" @click="resolvePending(p,'reject')">拒绝</button>
-          <button class="jarvis-btn" @click="resolvePending(p,'delete')">删除</button>
+          <button :style="btnPrimary" @click="resolvePending(p,'approve')">批准</button>
+          <button :style="btnBase" @click="resolvePending(p,'reject')">拒绝</button>
+          <button :style="btnDanger" @click="resolvePending(p,'delete')">删除</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 工具：发送/回复/转发/管理 -->
+    <div v-if="tab==='tools'">
+      <div style="margin-bottom:8px;display:flex;gap:6px;">
+        <button :style="toolTab==='send'?btnPrimary:btnBase" @click="toolTab='send'">发送</button>
+        <button :style="toolTab==='reply'?btnPrimary:btnBase" @click="toolTab='reply'">回复</button>
+        <button :style="toolTab==='forward'?btnPrimary:btnBase" @click="toolTab='forward'">转发</button>
+        <button :style="toolTab==='manage'?btnPrimary:btnBase" @click="openManage">管理</button>
+      </div>
+
+      <!-- 发送 -->
+      <div v-if="toolTab==='send'">
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">收件人</div>
+          <input class="jarvis-input" v-model="to" placeholder="收件人邮箱" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">主题</div>
+          <input class="jarvis-input" v-model="subject" placeholder="主题（可选）" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">正文</div>
+          <textarea class="jarvis-input" v-model="body" rows="5" placeholder="邮件正文" style="width:100%;box-sizing:border-box;"></textarea>
+        </div>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
+          <input type="checkbox" v-model="confirmed" /> 已确认发送（跳过确认弹窗）
+        </label>
+        <button :style="btnPrimary" @click="doSend" :disabled="loading">发送</button>
+      </div>
+
+      <!-- 回复 -->
+      <div v-if="toolTab==='reply'">
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">message_id</div>
+          <input class="jarvis-input" v-model="messageId" placeholder="要回复的邮件 ID" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">回复正文</div>
+          <textarea class="jarvis-input" v-model="body" rows="5" placeholder="回复内容" style="width:100%;box-sizing:border-box;"></textarea>
+        </div>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
+          <input type="checkbox" v-model="confirmed" /> 已确认（跳过确认弹窗）
+        </label>
+        <button :style="btnPrimary" @click="doReply" :disabled="loading">回复</button>
+      </div>
+
+      <!-- 转发 -->
+      <div v-if="toolTab==='forward'">
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">message_id</div>
+          <input class="jarvis-input" v-model="messageId" placeholder="要转发的邮件 ID" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">收件人</div>
+          <input class="jarvis-input" v-model="to" placeholder="转发给谁" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">附言（可选）</div>
+          <textarea class="jarvis-input" v-model="body" rows="3" placeholder="转发附言" style="width:100%;box-sizing:border-box;"></textarea>
+        </div>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
+          <input type="checkbox" v-model="confirmed" /> 已确认（跳过确认弹窗）
+        </label>
+        <button :style="btnPrimary" @click="doForward" :disabled="loading">转发</button>
+      </div>
+
+      <!-- 管理 -->
+      <div v-if="toolTab==='manage'">
+        <div style="margin-bottom:6px;font-size:11px;color:var(--color-text-secondary);">选择要操作的邮件（最近 20 封）：</div>
+        <div v-if="messages.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无邮件</div>
+        <div v-for="m in messages" :key="m.id"
+             @click="messageId=m.id"
+             style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;cursor:pointer;"
+             :style="messageId===m.id ? 'border-color:var(--color-accent);' : ''">
+          <div><strong>{{ m.subject || '（无主题）' }}</strong></div>
+          <div style="color:var(--color-text-secondary);">发件人：{{ m.sender || m.from || '未知' }} · {{ m.created_at || '' }}</div>
+        </div>
+        <div style="margin-top:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">选中的 message_id</div>
+          <input class="jarvis-input" v-model="messageId" placeholder="message_id" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button :style="btnBase" @click="doTrash" :disabled="loading">移入回收站</button>
+          <button :style="btnDanger" @click="doDelete" :disabled="loading">永久删除</button>
+        </div>
+      </div>
+
+      <div v-if="result" style="margin-top:8px;border:1px solid var(--color-border);border-radius:6px;padding:6px;font-size:11px;white-space:pre-wrap;word-break:break-word;">
+        <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">结果：</div>
+        {{ result }}
       </div>
     </div>
   </div>

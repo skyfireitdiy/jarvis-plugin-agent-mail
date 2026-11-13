@@ -88,6 +88,13 @@ export default {
   },
   data() {
     return {
+      // 紧凑按钮样式（参考其他插件，避免浏览器默认大按钮）
+      btnBase:
+        "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
+      btnPrimary:
+        "padding:4px 10px;background:var(--color-accent);color:#060911;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;",
+      btnDanger:
+        "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-error);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
       tab: "send", // send / reply / forward / manage
       loading: false,
       error: "",
@@ -223,10 +230,10 @@ export default {
       <strong>✉️ Agent Mail 工具</strong>
     </div>
     <div style="margin-bottom:8px;display:flex;gap:6px;">
-      <button class="jarvis-btn" :class="tab==='send'?'jarvis-btn-primary':''" @click="tab='send'">发送</button>
-      <button class="jarvis-btn" :class="tab==='reply'?'jarvis-btn-primary':''" @click="tab='reply'">回复</button>
-      <button class="jarvis-btn" :class="tab==='forward'?'jarvis-btn-primary':''" @click="tab='forward'">转发</button>
-      <button class="jarvis-btn" :class="tab==='manage'?'jarvis-btn-primary':''" @click="tab='manage'">管理</button>
+      <button :style="tab==='send'?btnPrimary:btnBase" @click="tab='send'">发送</button>
+      <button :style="tab==='reply'?btnPrimary:btnBase" @click="tab='reply'">回复</button>
+      <button :style="tab==='forward'?btnPrimary:btnBase" @click="tab='forward'">转发</button>
+      <button :style="tab==='manage'?btnPrimary:btnBase" @click="tab='manage'">管理</button>
     </div>
     <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
     <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">执行中…</div>
@@ -242,14 +249,14 @@ export default {
       <input class="jarvis-input" v-model="to" placeholder="收件人（必填）" style="width:100%;margin-bottom:6px;" />
       <input class="jarvis-input" v-model="subject" placeholder="主题" style="width:100%;margin-bottom:6px;" />
       <textarea class="jarvis-input" v-model="body" placeholder="正文" rows="5" style="width:100%;margin-bottom:6px;"></textarea>
-      <button class="jarvis-btn jarvis-btn-primary" @click="doSend" :disabled="loading">发送邮件</button>
+      <button :style="btnPrimary" @click="doSend" :disabled="loading">发送邮件</button>
     </div>
 
     <!-- 回复 -->
     <div v-if="tab==='reply'">
       <input class="jarvis-input" v-model="messageId" placeholder="message_id（必填）" style="width:100%;margin-bottom:6px;" />
       <textarea class="jarvis-input" v-model="body" placeholder="回复正文（必填）" rows="5" style="width:100%;margin-bottom:6px;"></textarea>
-      <button class="jarvis-btn jarvis-btn-primary" @click="doReply" :disabled="loading">发送回复</button>
+      <button :style="btnPrimary" @click="doReply" :disabled="loading">发送回复</button>
     </div>
 
     <!-- 转发 -->
@@ -257,7 +264,7 @@ export default {
       <input class="jarvis-input" v-model="messageId" placeholder="message_id（必填）" style="width:100%;margin-bottom:6px;" />
       <input class="jarvis-input" v-model="to" placeholder="收件人（必填）" style="width:100%;margin-bottom:6px;" />
       <textarea class="jarvis-input" v-model="body" placeholder="附加说明（可选）" rows="3" style="width:100%;margin-bottom:6px;"></textarea>
-      <button class="jarvis-btn jarvis-btn-primary" @click="doForward" :disabled="loading">转发邮件</button>
+      <button :style="btnPrimary" @click="doForward" :disabled="loading">转发邮件</button>
     </div>
 
     <!-- 管理 -->
@@ -271,8 +278,8 @@ export default {
       <div style="margin-top:8px;">
         <input class="jarvis-input" v-model="messageId" placeholder="message_id" style="width:100%;margin-bottom:6px;" />
         <div style="display:flex;gap:6px;">
-          <button class="jarvis-btn" @click="doTrash" :disabled="loading">移入回收站</button>
-          <button class="jarvis-btn" @click="doDelete" :disabled="loading">永久删除</button>
+          <button :style="btnBase" @click="doTrash" :disabled="loading">移入回收站</button>
+          <button :style="btnDanger" @click="doDelete" :disabled="loading">永久删除</button>
         </div>
       </div>
     </div>

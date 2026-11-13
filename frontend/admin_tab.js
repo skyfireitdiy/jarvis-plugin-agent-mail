@@ -87,6 +87,13 @@ export default {
   },
   data() {
     return {
+      // 紧凑按钮样式（参考其他插件，避免浏览器默认大按钮）
+      btnBase:
+        "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
+      btnPrimary:
+        "padding:4px 10px;background:var(--color-accent);color:#060911;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;",
+      btnDanger:
+        "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-error);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
       tab: "auth", // auth / rules / settings
       loading: false,
       error: "",
@@ -260,10 +267,10 @@ export default {
       <strong>⚙️ Agent Mail 管理</strong>
     </div>
     <div style="margin-bottom:8px;display:flex;gap:6px;">
-      <button class="jarvis-btn" :class="tab==='guide'?'jarvis-btn-primary':''" @click="tab='guide'">使用指南</button>
-      <button class="jarvis-btn" :class="tab==='auth'?'jarvis-btn-primary':''" @click="switchTab('auth')">授权</button>
-      <button class="jarvis-btn" :class="tab==='rules'?'jarvis-btn-primary':''" @click="switchTab('rules')">规则</button>
-      <button class="jarvis-btn" :class="tab==='settings'?'jarvis-btn-primary':''" @click="switchTab('settings')">设置</button>
+      <button :style="tab==='guide'?btnPrimary:btnBase" @click="tab='guide'">使用指南</button>
+      <button :style="tab==='auth'?btnPrimary:btnBase" @click="switchTab('auth')">授权</button>
+      <button :style="tab==='rules'?btnPrimary:btnBase" @click="switchTab('rules')">规则</button>
+      <button :style="tab==='settings'?btnPrimary:btnBase" @click="switchTab('settings')">设置</button>
     </div>
     <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
     <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
@@ -271,9 +278,9 @@ export default {
     <!-- 授权 -->
     <div v-if="tab==='auth'">
       <div style="margin-bottom:8px;display:flex;gap:6px;">
-        <button class="jarvis-btn" @click="loadAuth" :disabled="loading">刷新状态</button>
-        <button class="jarvis-btn" @click="doLogin" :disabled="loading">登录</button>
-        <button class="jarvis-btn" @click="doLogout" :disabled="loading">登出</button>
+        <button :style="btnBase" @click="loadAuth" :disabled="loading">刷新状态</button>
+        <button :style="btnPrimary" @click="doLogin" :disabled="loading">登录</button>
+        <button :style="btnDanger" @click="doLogout" :disabled="loading">登出</button>
       </div>
       <pre style="white-space:pre-wrap;word-break:break-word;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:11px;max-height:300px;overflow:auto;">{{ authInfo }}</pre>
       <div v-if="mailbox" style="font-size:12px;color:var(--color-text-primary);margin-top:8px;border:1px solid var(--color-border);border-radius:6px;padding:8px;">
@@ -300,8 +307,8 @@ export default {
         </div>
         <div style="color:var(--color-text-secondary);margin-top:4px;">{{ r.prompt_template.slice(0, 80) }}{{ r.prompt_template.length > 80 ? '…' : '' }}</div>
         <div style="display:flex;gap:6px;margin-top:6px;">
-          <button class="jarvis-btn" @click="editRule(r)">编辑</button>
-          <button class="jarvis-btn" @click="removeRule(r)">删除</button>
+          <button :style="btnBase" @click="editRule(r)">编辑</button>
+          <button :style="btnDanger" @click="removeRule(r)">删除</button>
         </div>
       </div>
 
@@ -335,8 +342,8 @@ export default {
           <input class="jarvis-input" v-model="(editing||newRule).whitelist" placeholder="白名单（逗号分隔，如 @qq.com, boss@x.com）" style="flex:1;" />
         </div>
         <div style="display:flex;gap:6px;">
-          <button class="jarvis-btn jarvis-btn-primary" @click="saveRule" :disabled="loading">{{ editing ? '保存修改' : '创建规则' }}</button>
-          <button v-if="editing" class="jarvis-btn" @click="cancelEdit">取消</button>
+          <button :style="btnPrimary" @click="saveRule" :disabled="loading">{{ editing ? '保存修改' : '创建规则' }}</button>
+          <button v-if="editing" :style="btnBase" @click="cancelEdit">取消</button>
         </div>
       </div>
     </div>
@@ -361,7 +368,7 @@ export default {
           <label>全局自动回复白名单（逗号分隔，如 @qq.com）：</label>
           <input class="jarvis-input" v-model="settings.auto_reply_whitelist" style="width:100%;" />
         </div>
-        <button class="jarvis-btn jarvis-btn-primary" @click="saveSettings" :disabled="loading">保存设置</button>
+        <button :style="btnPrimary" @click="saveSettings" :disabled="loading">保存设置</button>
       </div>
       <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;">
         安全提示：自动回复默认关闭；回复范围默认仅回原发件人；白名单可限制自动回复对象。
