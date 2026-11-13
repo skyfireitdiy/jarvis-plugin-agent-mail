@@ -140,13 +140,13 @@ export default {
     async loadAuth() {
       await this.guard(async () => {
         const payload = await callFunction("auth_status", {});
-        this.authInfo = JSON.stringify(payload.data || payload, null, 2);
+        this.authInfo = this.formatAuth(payload.data || payload);
       });
     },
     async doLogin() {
       await this.guard(async () => {
         const payload = await callFunction("auth_login", {});
-        this.authInfo = JSON.stringify(payload.data || payload, null, 2);
+        this.authInfo = this.formatAuth(payload.data || payload);
         this.toast("登录流程已发起（若需交互请用终端 agently-cli auth login）");
       });
     },
@@ -156,6 +156,23 @@ export default {
         this.authInfo = "已登出";
         this.toast("已登出");
       });
+    },
+    formatAuth(data) {
+      // 兼容两层嵌套：api.py 返回 {success, data:{ok, data:{logged_in,...}}}
+      const inner = (data && data.data && typeof data.data === "object") ? data.data : data;
+      if (!inner) return "无状态信息";
+      const loggedIn = inner.logged_in === true;
+      const lines = [];
+      if (inner.logged_in !== undefined) {
+        lines.push((loggedIn ? "✅ 已登录" : "⚠️ 未登录"));
+      }
+      if (inner.status) lines.push("状态: " + inner.status);
+      if (inner.message) lines.push("说明: " + inner.message);
+      if (inner.workspace) lines.push("工作区: " + inner.workspace);
+      if (inner.user) lines.push("账号: " + inner.user);
+      if (inner.email) lines.push("邮箱: " + inner.email);
+      if (inner.account) lines.push("账号: " + inner.account);
+      return lines.length ? lines.join("\n") : JSON.stringify(inner, null, 2);
     },
     async loadRules() {
       await this.guard(async () => {
