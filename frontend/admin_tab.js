@@ -255,7 +255,7 @@ export default {
     this.loadAuth();
   },
   template: `
-  <div class="agent-mail-admin">
+  <div class="agent-mail-admin" style="height:100%;overflow-y:auto;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <strong>⚙️ Agent Mail 管理</strong>
     </div>

@@ -108,7 +108,26 @@ export default {
   computed: {
     selectedBody() {
       const m = this.selected || {};
-      return m.body || m.snippet || m.content || "（无正文）";
+      const raw = m.body || m.snippet || m.content || "（无正文）";
+      // 邮件正文可能是 HTML，剥离标签转纯文本（防 XSS，避免显示源码）
+      if (typeof raw !== "string") return String(raw);
+      if (raw.includes("<")) {
+        const doc = new DOMParser().parseFromString(raw, "text/html");
+        // 移除 style/script/head 内容，避免 CSS/JS 文本混入正文
+        doc.querySelectorAll("style, script, head, title").forEach((el) => el.remove());
+        // 移除内联 display:none 的元素（如 PC/移动双版本邮件中隐藏的那套），避免重复段落
+        doc.querySelectorAll("*").forEach((el) => {
+          const s = (el.getAttribute("style") || "").toLowerCase();
+          if (s.includes("display:none") || s.includes("display: none")) {
+            el.remove();
+          }
+        });
+        let text = doc.body ? doc.body.textContent || "" : "";
+        // 折叠多余空白
+        text = text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+        return text || raw;
+      }
+      return raw;
     },
   },
   methods: {
@@ -208,7 +227,7 @@ export default {
     this.loadMessages();
   },
   template: `
-  <div class="agent-mail-sidebar">
+  <div class="agent-mail-sidebar" style="height:100%;overflow-y:auto;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <strong>📬 Agent Mail</strong>
       <button class="jarvis-btn" @click="refresh" :disabled="loading">刷新</button>

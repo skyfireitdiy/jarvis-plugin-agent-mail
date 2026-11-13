@@ -218,7 +218,7 @@ export default {
     this.loadMessages();
   },
   template: `
-  <div class="agent-mail-tool">
+  <div class="agent-mail-tool" style="height:100%;overflow-y:auto;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <strong>✉️ Agent Mail 工具</strong>
     </div>
