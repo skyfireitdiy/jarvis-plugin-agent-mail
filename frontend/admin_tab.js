@@ -120,7 +120,7 @@ export default {
         trigger_value: "",
         mode: "analyze",
         prompt_template:
-          "请分析这封邮件（主题：{subject}，发件人：{sender}），正文如下：\n{body}",
+          "请处理这封邮件：\n\n【邮件信息】\n- 主题：{subject}\n- 发件人：{sender}\n- 邮件ID：{message_id}\n{attachments}\n\n【邮件正文】\n{body}\n\n【处理要求】\n1. 先判断邮件意图（咨询/通知/任务/垃圾邮件/钓鱼等）\n2. 提取关键信息（时间、地点、数字、待办事项等）\n3. 给出简明扼要的处理建议\n4. 如需回复，草拟回复内容（语气专业友好、简洁）\n5. 涉及敏感信息或可疑内容时明确标注风险\n\n【输出格式】\n- 邮件意图：\n- 关键信息：\n- 处理建议：\n- 回复草稿（如需要）：",
         auto_reply: false,
         reply_scope: "sender",
         whitelist: [],
