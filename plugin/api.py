@@ -793,43 +793,100 @@ def list_pending() -> Dict[str, Any]:
 def resolve_pending(pending_id: str, action: str = "approve") -> Dict[str, Any]:
     """处理待确认队列中的任务。
 
-    action: approve=批准（按原计划继续）/ reject=拒绝 / delete=删除记录
+    action: approve=批准并按规则派发 Agent 处理 / reject=拒绝 / delete=删除记录
     """
     if not pending_id:
         return _err("缺少 pending_id", "INVALID_ARGUMENT")
     if action not in ("approve", "reject", "delete"):
         return _err("action 必须是 approve/reject/delete", "INVALID_ARGUMENT")
+
+    # 在锁内定位任务并更新状态/移除
     with _LOCK:
         pending = _load_pending()
-        for item in pending:
-            if item.get("id") == pending_id:
-                item["resolved_at"] = _now()
-                item["resolution"] = action
-                if action == "approve":
-                    item["status"] = "approved"
-                    # 记录留痕，实际回复动作由用户在前端确认后手动触发
-                    _append_history(
-                        {
-                            "id": str(uuid.uuid4()),
-                            "kind": "pending_approved",
-                            "message_id": item.get("message_id", ""),
-                            "rule_id": item.get("rule_id", ""),
-                            "rule_name": item.get("rule_name", ""),
-                            "action": action,
-                            "created_at": _now(),
-                            "detail": "待确认任务已批准",
-                        }
-                    )
-                elif action == "reject":
-                    item["status"] = "rejected"
-                # delete: 直接从队列移除
-                if action == "delete":
-                    pending.remove(item)
-                else:
-                    pending[pending.index(item)] = item
-                _save_pending(pending)
-                return _ok(item, f"待确认任务已{action}")
-    return _err("待确认任务不存在", "NOT_FOUND")
+        item = None
+        for p in pending:
+            if p.get("id") == pending_id:
+                item = p
+                break
+        if item is None:
+            return _err("待确认任务不存在", "NOT_FOUND")
+        item["resolved_at"] = _now()
+        item["resolution"] = action
+        if action == "approve":
+            item["status"] = "approved"
+        elif action == "reject":
+            item["status"] = "rejected"
+        # 处理完（批准/拒绝）或删除：从队列移除
+        pending.remove(item)
+        _save_pending(pending)
+
+    if action == "approve":
+        # 批准：按规则派发 Agent 真正处理该邮件（此前 manual_confirm 未派发 Agent）。
+        # 在锁外执行，避免持锁期间做 Agent 派发等重操作。
+        rule = None
+        for r in _load_rules():
+            if r.get("id") == item.get("rule_id"):
+                rule = r
+                break
+        if rule is None:
+            # 规则可能已被删除：用任务里存的规则信息兜底
+            rule = {"id": item.get("rule_id", ""), "name": item.get("rule_name", "")}
+        message = {
+            "id": item.get("message_id", ""),
+            "sender": item.get("sender", ""),
+            "subject": item.get("subject", ""),
+            "body": item.get("body", ""),
+        }
+        result = _spawn_agent(item.get("prompt", ""), str(message.get("id", "")), rule)
+        if not result.get("success"):
+            # 派发失败：任务放回队列，保留待处理状态供重试
+            with _LOCK:
+                pending = _load_pending()
+                if item.get("id") not in [p.get("id") for p in pending]:
+                    item["status"] = "pending"
+                    item.pop("resolved_at", None)
+                    item.pop("resolution", None)
+                    pending.append(item)
+                    _save_pending(pending)
+            return result
+        agent_id = result.get("data", {}).get("agent_id", "")
+        _append_history(
+            {
+                "id": str(uuid.uuid4()),
+                "kind": "pending_approved",
+                "message_id": item.get("message_id", ""),
+                "rule_id": item.get("rule_id", ""),
+                "rule_name": item.get("rule_name", ""),
+                "action": action,
+                "status": "dispatched",
+                "agent_id": agent_id,
+                "created_at": _now(),
+                "detail": "已批准并派发 Agent 处理",
+            }
+        )
+        return _ok(
+            {"resolved": action, "dispatched": "agent", "agent_id": agent_id},
+            "已批准并派发 Agent 处理",
+        )
+
+    if action == "reject":
+        _append_history(
+            {
+                "id": str(uuid.uuid4()),
+                "kind": "pending_rejected",
+                "message_id": item.get("message_id", ""),
+                "rule_id": item.get("rule_id", ""),
+                "rule_name": item.get("rule_name", ""),
+                "action": action,
+                "status": "rejected",
+                "created_at": _now(),
+                "detail": "待确认任务已拒绝",
+            }
+        )
+        return _ok(item, "待确认任务已拒绝")
+
+    # delete
+    return _ok(item, "待确认任务已删除")
 
 
 # ---------------------------------------------------------------------------
@@ -1026,7 +1083,7 @@ def _spawn_agent(task: str, message_id: str, rule: Dict[str, Any]) -> Dict[str, 
     auth_token = os.environ.get("JARVIS_AUTH_TOKEN", "")
 
     try:
-        agent_id = manager.create_agent_threadsafe(
+        agent_info = manager.create_agent_threadsafe(
             agent_type=agent_type,
             working_dir=working_dir,
             name=f"mail-{message_id[:8]}",
@@ -1041,6 +1098,9 @@ def _spawn_agent(task: str, message_id: str, rule: Dict[str, Any]) -> Dict[str, 
         )
     except Exception as exc:
         return _err(f"Agent 派发失败：{exc}", "AGENT_DISPATCH_FAILED")
+
+    # create_agent_threadsafe 返回 agent 信息字典，提取其中的 agent_id
+    agent_id = agent_info.get("agent_id", "") if isinstance(agent_info, dict) else str(agent_info)
 
     _append_history(
         {
