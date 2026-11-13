@@ -18,12 +18,12 @@ function normalizeSubject(subject) {
   }
   return s;
 }
-// 会话归组：同联系人（发件人邮箱）+ 同主题（去前缀）视为一个会话
+// 会话归组：同主题（去前缀）视为一个会话，跨联系人（Gmail 风格）
 function threadContact(m) {
-  return (m && m.from_email) || (m && m.from) || (m && m.sender) || "unknown";
+  return (m && m.from_email) || (m && m.from) || (m && m.sender) || "未知";
 }
 function threadKey(m) {
-  return normalizeSubject(m.subject) + "\u0000" + String(threadContact(m)).toLowerCase();
+  return normalizeSubject(m.subject);
 }
 
 // 解析 gateway 地址（与 App.vue 一致）
@@ -162,14 +162,16 @@ export default {
       }
       const list = [];
       for (const [key, msgs] of groups) {
-        msgs.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        // 会话内按时间正序（最旧在上，Gmail 风格）
+        msgs.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+        const latest = msgs[msgs.length - 1];
         list.push({
           key,
           subject: normalizeSubject(msgs[0].subject),
-          contact: threadContact(msgs[0]),
+          contact: threadContact(latest),
           messages: msgs,
           count: msgs.length,
-          latest: msgs[0],
+          latest,
         });
       }
       list.sort((a, b) =>
