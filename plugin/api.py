@@ -191,6 +191,84 @@ def _run_cli(args: List[str], timeout: int = 60) -> Dict[str, Any]:
     return _err(f"{hint}：{detail}", code_name)
 
 
+def _normalize_message(raw: Any) -> Dict[str, Any]:
+    """把 agently-cli 原始消息结构转成前端友好的统一结构。
+
+    CLI 返回的字段：message_id / from{email,name} / to[{email,name}] /
+    subject / snippet / body / created_at / is_read / has_attachments /
+    attachments / dir / rfc_message_id。
+    前端期望：id / sender / from(字符串) / subject / body / snippet /
+    attachments / created_at / is_read / has_attachments。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    from_obj = raw.get("from") or {}
+    if isinstance(from_obj, dict):
+        sender_email = from_obj.get("email", "")
+        sender_name = from_obj.get("name", "")
+        sender = sender_name or sender_email
+    else:
+        sender_email = str(from_obj)
+        sender_name = ""
+        sender = sender_email
+    to_list = raw.get("to") or []
+    to_addrs = []
+    for t in to_list:
+        if isinstance(t, dict):
+            to_addrs.append(t.get("email", "") or t.get("name", ""))
+        elif t:
+            to_addrs.append(str(t))
+    attachments = raw.get("attachments") or []
+    norm = {
+        "id": raw.get("message_id") or raw.get("id") or "",
+        "message_id": raw.get("message_id") or raw.get("id") or "",
+        "sender": sender,
+        "from": sender,
+        "from_email": sender_email,
+        "from_name": sender_name,
+        "to": to_addrs,
+        "subject": raw.get("subject", ""),
+        "body": raw.get("body", ""),
+        "snippet": raw.get("snippet", ""),
+        "created_at": raw.get("created_at", ""),
+        "is_read": bool(raw.get("is_read", False)),
+        "has_attachments": bool(raw.get("has_attachments", False)),
+        "attachments": attachments,
+        "dir": raw.get("dir", ""),
+    }
+    # 保留原始字段，便于前端/Agent 使用
+    for k, v in raw.items():
+        if k not in norm:
+            norm[k] = v
+    return norm
+
+
+def _parse_message_list(result: Dict[str, Any]) -> Dict[str, Any]:
+    """解析 agently-cli message +list/+search 的输出为前端友好结构。
+
+    CLI 输出形如 {"ok": true, "data": {"data": [...], "pagination": {...}}}，
+    兼容多种嵌套层级。返回：{messages: [...], next_cursor, has_more, total}。
+    """
+    data = result.get("data")
+    # 剥掉 CLI 的 {ok, data} 包装
+    if isinstance(data, dict) and "data" in data and "ok" in data:
+        data = data.get("data")
+    messages: List[Any] = []
+    pagination = {}
+    if isinstance(data, dict):
+        inner = data.get("data")
+        if isinstance(inner, list):
+            messages = inner
+        pagination = data.get("pagination") or {}
+    elif isinstance(data, list):
+        messages = data
+    return {
+        "messages": [_normalize_message(m) for m in messages if isinstance(m, dict)],
+        "next_cursor": (pagination or {}).get("next_cursor", ""),
+        "has_more": bool((pagination or {}).get("has_more", False)),
+    }
+
+
 def _get_agent_manager():
     """获取 gateway 进程内的 AgentManager（用于派发 Agent）。
 
@@ -285,29 +363,70 @@ def get_mailbox() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def list_messages(page: int = 1, page_size: int = 20) -> Dict[str, Any]:
-    """列出邮箱消息（agently-cli message +list，分页）。"""
+def list_messages(
+    page: int = 1,
+    page_size: int = 20,
+    folder: str = "",
+    cursor: str = "",
+) -> Dict[str, Any]:
+    """列出邮箱消息（agently-cli message +list）。
+
+    支持分页游标（cursor）与文件夹过滤（folder: inbox/sent/trash/spam）。
+    """
     page = max(1, int(page or 1))
-    page_size = max(1, min(100, int(page_size or 20)))
-    return _run_cli(["message", "+list", "--page", str(page), "--page-size", str(page_size)])
+    page_size = max(1, min(50, int(page_size or 20)))
+    args = ["message", "+list", "--limit", str(page_size)]
+    if folder:
+        args += ["--dir", str(folder)]
+    if cursor:
+        args += ["--cursor", str(cursor)]
+    result = _run_cli(args)
+    if not result.get("success"):
+        return result
+    parsed = _parse_message_list(result)
+    parsed["page"] = page
+    parsed["page_size"] = page_size
+    return _ok(parsed)
 
 
 def read_message(message_id: str) -> Dict[str, Any]:
     """读取单封邮件详情（agently-cli message +read --id）。"""
     if not message_id:
         return _err("缺少 message_id", "INVALID_ARGUMENT")
-    return _run_cli(["message", "+read", "--id", str(message_id)])
+    result = _run_cli(["message", "+read", "--id", str(message_id)])
+    if not result.get("success"):
+        return result
+    data = result.get("data") or {}
+    # 剥掉 CLI 的 {ok, data} 包装
+    if isinstance(data, dict) and "data" in data and "ok" in data:
+        data = data.get("data")
+    return _ok(_normalize_message(data))
 
 
-def search_messages(query: str, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+def search_messages(
+    query: str,
+    page: int = 1,
+    page_size: int = 20,
+    folder: str = "",
+    cursor: str = "",
+) -> Dict[str, Any]:
     """搜索邮件（agently-cli message +search --q）。"""
     if not query:
         return _err("缺少搜索关键词 query", "INVALID_ARGUMENT")
     page = max(1, int(page or 1))
-    page_size = max(1, min(100, int(page_size or 20)))
-    return _run_cli(
-        ["message", "+search", "--q", str(query), "--page", str(page), "--page-size", str(page_size)]
-    )
+    page_size = max(1, min(50, int(page_size or 20)))
+    args = ["message", "+search", "--q", str(query), "--limit", str(page_size)]
+    if folder:
+        args += ["--dir", str(folder)]
+    if cursor:
+        args += ["--cursor", str(cursor)]
+    result = _run_cli(args)
+    if not result.get("success"):
+        return result
+    parsed = _parse_message_list(result)
+    parsed["page"] = page
+    parsed["page_size"] = page_size
+    return _ok(parsed)
 
 
 def send_message(
@@ -926,15 +1045,11 @@ def _spawn_agent(task: str, message_id: str, rule: Dict[str, Any]) -> Dict[str, 
 
 def _collect_new_messages() -> List[Dict[str, Any]]:
     """拉取新邮件（未处理过的）。CLI 不可用时返回空列表。"""
-    result = _run_cli(["message", "+list", "--page", "1", "--page-size", "50"])
+    result = _run_cli(["message", "+list", "--limit", "50"])
     if not result.get("success"):
         return []
-    data = result.get("data", {})
-    messages = []
-    if isinstance(data, dict):
-        messages = data.get("messages") or data.get("items") or data.get("list") or []
-    elif isinstance(data, list):
-        messages = data
+    parsed = _parse_message_list(result)
+    messages = parsed.get("messages", [])
     seen = set(_load_seen())
     return [m for m in messages if str(m.get("id", "")) and str(m.get("id")) not in seen]
 
