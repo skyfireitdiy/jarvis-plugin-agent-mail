@@ -73,7 +73,10 @@ async function callFunction(functionName, args, nodeId) {
   }
   const payload = result.result || {};
   if (payload.success === false) {
-    throw new Error(payload.error || "操作失败");
+    const perr = payload.error || {};
+    throw new Error(
+      (perr && perr.message) || (typeof perr === "string" ? perr : "") || "操作失败",
+    );
   }
   return payload;
 }

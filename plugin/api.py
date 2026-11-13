@@ -56,6 +56,9 @@ _DEFAULT_SETTINGS: Dict[str, Any] = {
     "agent_type": "agent",
     "working_dir": os.path.expanduser("~"),
     "auto_reply_whitelist": [],  # 全局自动回复白名单（邮箱地址/域名）
+    # 邮箱账号信息（用户配置，用于发件人识别/白名单匹配/自动回复）
+    "mailbox": "",  # 本机邮箱地址，如 xxx@agent.qq.com
+    "mailbox_domain": "",  # 邮箱域名，如 agent.qq.com
 }
 
 # 防 prompt injection：固定注入到派发提示词末尾的安全声明

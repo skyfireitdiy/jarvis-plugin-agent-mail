@@ -72,7 +72,10 @@ async function callFunction(functionName, args, nodeId) {
   }
   const payload = result.result || {};
   if (payload.success === false) {
-    throw new Error(payload.error || "操作失败");
+    const perr = payload.error || {};
+    throw new Error(
+      (perr && perr.message) || (typeof perr === "string" ? perr : "") || "操作失败",
+    );
   }
   return payload;
 }
@@ -307,6 +310,18 @@ export default {
 
     <!-- 设置 -->
     <div v-if="tab==='settings' && settings">
+      <div style="border:1px solid #ddd;border-radius:6px;padding:8px;font-size:12px;margin-bottom:8px;">
+        <div style="font-weight:bold;margin-bottom:6px;">📧 邮箱信息</div>
+        <div style="margin-bottom:6px;">
+          <label>本机邮箱地址（如 xxx@agent.qq.com）：</label>
+          <input class="jarvis-input" v-model="settings.mailbox" placeholder="xxx@agent.qq.com" style="width:100%;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <label>邮箱域名（如 agent.qq.com，用于识别本机发件）：</label>
+          <input class="jarvis-input" v-model="settings.mailbox_domain" placeholder="agent.qq.com" style="width:100%;" />
+        </div>
+        <button class="jarvis-btn" @click="saveSettings" :disabled="loading">保存邮箱信息</button>
+      </div>
       <div style="border:1px solid #ddd;border-radius:6px;padding:8px;font-size:12px;">
         <div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
           <label style="display:flex;align-items:center;gap:4px;">
