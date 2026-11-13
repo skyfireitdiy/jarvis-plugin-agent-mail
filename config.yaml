@@ -1,0 +1,42 @@
+---
+id: agent-mail
+name: Agent Mail
+description: >-
+  Agent Mail——接入腾讯 QQ 邮箱 AI Agent 专属邮箱服务（agently-cli），
+  支持后台监听新邮件、前端收发/搜索/回复邮件、按预定义规则自动派发 Agent 处理
+  （可配置自动回复、白名单与三档处理模式）。
+version: 0.1.0
+license: MIT
+logo: >-
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+  stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"
+  aria-hidden="true">
+  <rect x="1.5" y="3" width="13" height="10" rx="1.5"/>
+  <path d="M2 4l6 5 6-5"/>
+  </svg>
+tool_load_dirs:
+  - "{{plugin_dir}}/tools"
+rules_load_dirs:
+  - "{{plugin_dir}}/rules"
+timer_actions:
+  - "{{plugin_dir}}/timer_actions"
+frontend:
+  admin_tabs:
+    - id: agentmail-admin
+      title: "邮件管理"
+      entry: admin_tab.js
+  sidebar_views:
+    - id: agentmail
+      title: "邮件收件箱"
+      entry: sidebar_view.js
+  tool_panels:
+    - id: agentmail-tool
+      title: "Agent 邮件"
+      entry: tool_panel.js
+capabilities:
+  - name: "邮件收发与搜索"
+    description: "通过 agently-cli 收发/搜索/回复/转发/删除邮件，下载附件"
+  - name: "后台监听与自动处理"
+    description: "定时轮询新邮件，按预定义规则（触发条件+提示词模板+自动回复开关+白名单）派发 Agent 处理"
+  - name: "安全护栏"
+    description: "自动回复默认关闭、仅白名单发件人可自动回复、防 prompt injection、处理留痕、失败进待确认队列"
