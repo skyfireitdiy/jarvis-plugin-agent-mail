@@ -94,6 +94,9 @@ export default {
         "padding:4px 10px;background:var(--color-accent);color:#060911;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;",
       btnDanger:
         "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-error);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
+      // 下拉框样式（与按钮/输入框配色一致，避免浏览器默认样式）
+      selectBase:
+        "padding:4px 6px;background:var(--color-bg-tertiary);color:var(--color-text-primary);border:1px solid var(--color-border-subtle);border-radius:4px;font-size:12px;",
       tab: "auth", // auth / rules / settings
       loading: false,
       error: "",
@@ -316,7 +319,7 @@ export default {
         <div style="font-size:12px;font-weight:bold;margin-bottom:6px;">{{ editing ? '编辑规则' : '新建规则' }}</div>
         <input class="jarvis-input" v-model="(editing||newRule).name" placeholder="规则名称（必填）" style="width:100%;margin-bottom:6px;" />
         <div style="display:flex;gap:6px;margin-bottom:6px;">
-          <select class="jarvis-input" v-model="(editing||newRule).trigger_type" style="flex:1;">
+          <select :style="selectBase" v-model="(editing||newRule).trigger_type" style="flex:1;">
             <option value="sender_contains">发件人包含</option>
             <option value="keyword">关键词</option>
             <option value="all">全部邮件</option>
@@ -324,12 +327,12 @@ export default {
           <input class="jarvis-input" v-model="(editing||newRule).trigger_value" placeholder="触发值（全部邮件可留空）" style="flex:2;" />
         </div>
         <div style="display:flex;gap:6px;margin-bottom:6px;">
-          <select class="jarvis-input" v-model="(editing||newRule).mode" style="flex:1;">
+          <select :style="selectBase" v-model="(editing||newRule).mode" style="flex:1;">
             <option value="analyze">只读分析</option>
             <option value="auto_reply">受控自动回复</option>
             <option value="manual_confirm">人工确认</option>
           </select>
-          <select class="jarvis-input" v-model="(editing||newRule).reply_scope" style="flex:1;">
+          <select :style="selectBase" v-model="(editing||newRule).reply_scope" style="flex:1;">
             <option value="sender">仅回原发件人</option>
             <option value="whitelist">白名单</option>
           </select>
