@@ -146,8 +146,11 @@ export default {
     async doLogin() {
       await this.guard(async () => {
         const payload = await callFunction("auth_login", {});
-        this.authInfo = this.formatAuth(payload.data || payload);
-        this.toast("登录流程已发起（若需交互请用终端 agently-cli auth login）");
+        const d = payload.data || payload;
+        const cmd = (d && d.command) || "agently-cli auth login";
+        this.authInfo = "请在服务器终端执行以下命令完成登录：\n\n  " + cmd +
+          "\n\n执行后打开终端显示的授权链接，扫码/确认即可。完成后点击「刷新状态」查看登录结果。";
+        this.toast("请在终端执行登录命令");
       });
     },
     async doLogout() {

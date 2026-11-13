@@ -218,12 +218,24 @@ def auth_status() -> Dict[str, Any]:
 
 
 def auth_login() -> Dict[str, Any]:
-    """发起登录（agently-cli auth login，交互式扫码/链接登录）。
+    """发起登录（agently-cli auth login）。
 
-    注意：子进程交互式登录在 gateway 后台可能无法完成，若失败请改用
-    agently-cli auth login 在终端手动登录。
+    注意：agently-cli auth login 是交互式命令（打印授权链接后阻塞等待浏览器授权），
+    在 gateway 后台子进程中无法完成交互，因此这里不直接执行，而是引导用户在
+    终端手动执行。返回的 data.command 为登录命令。
     """
-    return _run_cli(["auth", "login"], timeout=120)
+    if not _cli_available():
+        return _err(
+            f"未检测到 {CLI_NAME}，请先安装：npm install -g @tencent-qqmail/agently-cli",
+            "CLI_NOT_FOUND",
+        )
+    return _ok(
+        {
+            "command": f"{CLI_NAME} auth login",
+            "hint": "请在服务器终端执行上面的命令，打开授权链接并扫码/确认登录",
+        },
+        f"请在终端执行: {CLI_NAME} auth login",
+    )
 
 
 def auth_logout() -> Dict[str, Any]:
