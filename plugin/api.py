@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -73,8 +74,11 @@ _WRITE_COMMANDS = ("send", "reply", "forward", "trash", "delete")
 # 进程内写锁（数据文件并发读写）
 _LOCK = threading.RLock()
 
-# CLI 未安装的缓存标记
-_CLI_MISSING: Optional[bool] = None
+# CLI 可用性短时缓存（TTL 30s，避免每次调用都跑 shutil.which；
+# 安装/升级 CLI 后无需重启进程，最多 30s 自动生效）
+_CLI_CACHE: Optional[bool] = None
+_CLI_CACHE_AT: float = 0.0
+_CLI_CACHE_TTL = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +127,16 @@ def _write_json(path: str, data: Any) -> None:
 
 
 def _cli_available() -> bool:
-    """检测 agently-cli 是否可用（结果缓存）。"""
-    global _CLI_MISSING
-    if _CLI_MISSING is None:
-        _CLI_MISSING = shutil.which(CLI_NAME) is None
-    return not _CLI_MISSING
+    """检测 agently-cli 是否可用（短时缓存，TTL 内复用结果）。
+
+    不用永久缓存：用户安装/升级 CLI 后无需重启进程，最多 TTL 秒自动生效。
+    """
+    global _CLI_CACHE, _CLI_CACHE_AT
+    now = time.time()
+    if _CLI_CACHE is None or now - _CLI_CACHE_AT > _CLI_CACHE_TTL:
+        _CLI_CACHE = shutil.which(CLI_NAME) is not None
+        _CLI_CACHE_AT = now
+    return _CLI_CACHE
 
 
 def _run_cli(args: List[str], timeout: int = 60) -> Dict[str, Any]:
