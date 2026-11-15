@@ -24,6 +24,8 @@ def _load_api():
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(module_name, api_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 {api_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)

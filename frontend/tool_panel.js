@@ -103,6 +103,8 @@ export default {
       to: "",
       subject: "",
       body: "",
+      // 附件（已上传到服务器的文件名列表，相对 attachments/ 目录）
+      attachments: [],
       // 回复/转发/删除
       messageId: "",
       // 授权确认
@@ -129,6 +131,41 @@ export default {
         this.loading = false;
       }
     },
+    // 读取本地文件为 base64（dataURL），供 upload_attachment 上传
+    readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+        reader.readAsDataURL(file);
+      });
+    },
+    async onPickAttachments(event) {
+      const files = Array.from(event.target.files || []);
+      event.target.value = "";
+      if (!files.length) return;
+      for (const file of files) {
+        try {
+          const data = await this.readFileAsDataUrl(file);
+          const payload = await callFunction("upload_attachment", {
+            filename: file.name,
+            data,
+          });
+          const info = (payload && payload.data) || {};
+          if (info.filename) {
+            this.attachments.push(info.filename);
+            this.toast(`已添加附件：${info.filename}`);
+          } else {
+            this.error = `上传失败：${file.name}`;
+          }
+        } catch (e) {
+          this.error = `上传失败 ${file.name}：${e.message || e}`;
+        }
+      }
+    },
+    removeAttachment(name) {
+      this.attachments = this.attachments.filter((n) => n !== name);
+    },
     async doSend() {
       if (!this.to.trim()) {
         this.error = "请填写收件人";
@@ -139,6 +176,7 @@ export default {
           to: this.to.trim(),
           subject: this.subject,
           body: this.body,
+          attachments: this.attachments.length ? this.attachments.slice() : undefined,
           confirmed: this.confirmed,
         });
         this.result = JSON.stringify(payload.data || payload, null, 2);
@@ -154,6 +192,7 @@ export default {
         const payload = await callFunction("reply_message", {
           message_id: this.messageId.trim(),
           body: this.body,
+          attachments: this.attachments.length ? this.attachments.slice() : undefined,
           confirmed: this.confirmed,
         });
         this.result = JSON.stringify(payload.data || payload, null, 2);
@@ -170,6 +209,7 @@ export default {
           message_id: this.messageId.trim(),
           to: this.to.trim(),
           body: this.body,
+          attachments: this.attachments.length ? this.attachments.slice() : undefined,
           confirmed: this.confirmed,
         });
         this.result = JSON.stringify(payload.data || payload, null, 2);
@@ -249,6 +289,17 @@ export default {
       <input class="jarvis-input" v-model="to" placeholder="收件人（必填）" style="width:100%;margin-bottom:6px;" />
       <input class="jarvis-input" v-model="subject" placeholder="主题" style="width:100%;margin-bottom:6px;" />
       <textarea class="jarvis-input" v-model="body" placeholder="正文" rows="5" style="width:100%;margin-bottom:6px;"></textarea>
+      <div style="margin-bottom:6px;">
+        <button :style="btnBase" @click="$refs.sendAttInput.click()">📎 添加附件</button>
+        <input ref="sendAttInput" type="file" multiple style="display:none;" @change="onPickAttachments" />
+        <span v-if="attachments.length" style="font-size:11px;color:var(--color-text-secondary);margin-left:6px;">{{ attachments.length }} 个附件</span>
+      </div>
+      <div v-if="attachments.length" style="margin-bottom:6px;">
+        <span v-for="name in attachments" :key="name"
+              style="display:inline-block;background:var(--color-bg-tertiary);border:1px solid var(--color-border-subtle);border-radius:4px;padding:2px 6px;margin:0 4px 4px 0;font-size:11px;">
+          {{ name }} <a href="javascript:void(0)" @click="removeAttachment(name)" style="color:var(--color-error);">✕</a>
+        </span>
+      </div>
       <button :style="btnPrimary" @click="doSend" :disabled="loading">发送邮件</button>
     </div>
 
@@ -256,6 +307,17 @@ export default {
     <div v-if="tab==='reply'">
       <input class="jarvis-input" v-model="messageId" placeholder="message_id（必填）" style="width:100%;margin-bottom:6px;" />
       <textarea class="jarvis-input" v-model="body" placeholder="回复正文（必填）" rows="5" style="width:100%;margin-bottom:6px;"></textarea>
+      <div style="margin-bottom:6px;">
+        <button :style="btnBase" @click="$refs.replyAttInput.click()">📎 添加附件</button>
+        <input ref="replyAttInput" type="file" multiple style="display:none;" @change="onPickAttachments" />
+        <span v-if="attachments.length" style="font-size:11px;color:var(--color-text-secondary);margin-left:6px;">{{ attachments.length }} 个附件</span>
+      </div>
+      <div v-if="attachments.length" style="margin-bottom:6px;">
+        <span v-for="name in attachments" :key="name"
+              style="display:inline-block;background:var(--color-bg-tertiary);border:1px solid var(--color-border-subtle);border-radius:4px;padding:2px 6px;margin:0 4px 4px 0;font-size:11px;">
+          {{ name }} <a href="javascript:void(0)" @click="removeAttachment(name)" style="color:var(--color-error);">✕</a>
+        </span>
+      </div>
       <button :style="btnPrimary" @click="doReply" :disabled="loading">发送回复</button>
     </div>
 
@@ -264,6 +326,17 @@ export default {
       <input class="jarvis-input" v-model="messageId" placeholder="message_id（必填）" style="width:100%;margin-bottom:6px;" />
       <input class="jarvis-input" v-model="to" placeholder="收件人（必填）" style="width:100%;margin-bottom:6px;" />
       <textarea class="jarvis-input" v-model="body" placeholder="附加说明（可选）" rows="3" style="width:100%;margin-bottom:6px;"></textarea>
+      <div style="margin-bottom:6px;">
+        <button :style="btnBase" @click="$refs.forwardAttInput.click()">📎 添加附件</button>
+        <input ref="forwardAttInput" type="file" multiple style="display:none;" @change="onPickAttachments" />
+        <span v-if="attachments.length" style="font-size:11px;color:var(--color-text-secondary);margin-left:6px;">{{ attachments.length }} 个附件</span>
+      </div>
+      <div v-if="attachments.length" style="margin-bottom:6px;">
+        <span v-for="name in attachments" :key="name"
+              style="display:inline-block;background:var(--color-bg-tertiary);border:1px solid var(--color-border-subtle);border-radius:4px;padding:2px 6px;margin:0 4px 4px 0;font-size:11px;">
+          {{ name }} <a href="javascript:void(0)" @click="removeAttachment(name)" style="color:var(--color-error);">✕</a>
+        </span>
+      </div>
       <button :style="btnPrimary" @click="doForward" :disabled="loading">转发邮件</button>
     </div>
 

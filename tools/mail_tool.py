@@ -25,6 +25,8 @@ def _load_api():
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(module_name, api_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 {api_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
@@ -32,20 +34,26 @@ def _load_api():
 
 
 class mail_tool:
-    """Agent Mail 邮件工具：读/搜/发/回/转/删邮件。
+    """Agent Mail 邮件工具：读/搜/发/回/转/删邮件、下载附件。
 
     用途:
     - 列出邮箱消息、读取单封邮件、搜索邮件
     - 发送新邮件、回复、转发、移入回收站、删除
+    - 下载邮件附件
     - 写操作（send/reply/forward/trash/delete）需要 confirmation-token；
       用户明确授权时可传 confirmed=True 免除。
 
     参数:
-    - action (str): 操作类型，list/read/search/send/reply/forward/trash/delete
-    - message_id (str): 邮件 ID（read/reply/forward/trash/delete 需要）
+    - action (str): 操作类型，list/read/search/send/reply/forward/trash/delete/download
+    - message_id (str): 邮件 ID（read/reply/forward/trash/delete/download 需要）
+    - attachment_id (str): 附件 ID（download 需要）
+    - output (str): 附件下载目录（download 可选，默认插件数据目录）
     - to (str): 收件人（send/forward 需要）
     - subject (str): 主题（send 可选）
     - body (str): 正文（send/reply/forward 可选）
+    - attachments (list[str]): 附件路径列表（send/reply/forward 可选，
+      相对插件数据目录 attachments/，如 ["report.pdf"]）
+    - include_attachments (bool): 转发时是否携带原邮件附件（forward 可选）
     - query (str): 搜索关键词（search 需要）
     - page (int): 分页页码，默认 1
     - page_size (int): 分页大小，默认 20
@@ -59,20 +67,35 @@ class mail_tool:
     """
 
     name = "mail_tool"
-    description = "Agent Mail 邮件工具：读/搜/发/回/转/删邮件（封装 agently-cli）。"
+    description = "Agent Mail 邮件工具：读/搜/发/回/转/删邮件、下载附件（封装 agently-cli）。"
 
     parameters = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "read", "search", "send", "reply", "forward", "trash", "delete"],
+                "enum": ["list", "read", "search", "send", "reply", "forward", "trash", "delete", "download"],
                 "description": "操作类型",
             },
             "message_id": {"type": "string", "description": "邮件 ID"},
+            "attachment_id": {"type": "string", "description": "附件 ID（download 需要）"},
+            "attachment": {
+                "type": "object",
+                "description": "附件对象（download 可选，含 attachment_id/download_url 等；大附件无 attachment_id 时自动返回下载链接）",
+            },
+            "output": {"type": "string", "description": "附件下载目录（download 可选）"},
             "to": {"type": "string", "description": "收件人"},
             "subject": {"type": "string", "description": "主题"},
             "body": {"type": "string", "description": "正文"},
+            "attachments": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "附件路径列表（相对插件数据目录 attachments/）",
+            },
+            "include_attachments": {
+                "type": "boolean",
+                "description": "转发时是否携带原邮件附件（forward 可选）",
+            },
             "query": {"type": "string", "description": "搜索关键词"},
             "page": {"type": "integer", "description": "分页页码，默认 1"},
             "page_size": {"type": "integer", "description": "分页大小，默认 20"},
@@ -91,11 +114,11 @@ class mail_tool:
         try:
             api = _load_api()
             action = args.get("action")
-            if action not in ("list", "read", "search", "send", "reply", "forward", "trash", "delete"):
+            if action not in ("list", "read", "search", "send", "reply", "forward", "trash", "delete", "download"):
                 return {
                     "success": False,
                     "stdout": "",
-                    "stderr": "参数错误：action 必须是 list/read/search/send/reply/forward/trash/delete",
+                    "stderr": "参数错误：action 必须是 list/read/search/send/reply/forward/trash/delete/download",
                 }
 
             result = self._dispatch(api, action, args)
@@ -138,6 +161,7 @@ class mail_tool:
                 to=args.get("to", ""),
                 subject=args.get("subject", ""),
                 body=args.get("body", ""),
+                attachments=args.get("attachments"),
                 confirmation_token=args.get("confirmation_token", ""),
                 confirmed=bool(args.get("confirmed", False)),
             )
@@ -145,6 +169,7 @@ class mail_tool:
             return api.reply_message(
                 message_id=args.get("message_id", ""),
                 body=args.get("body", ""),
+                attachments=args.get("attachments"),
                 confirmation_token=args.get("confirmation_token", ""),
                 confirmed=bool(args.get("confirmed", False)),
             )
@@ -153,8 +178,17 @@ class mail_tool:
                 message_id=args.get("message_id", ""),
                 to=args.get("to", ""),
                 body=args.get("body", ""),
+                attachments=args.get("attachments"),
+                include_attachments=bool(args.get("include_attachments", False)),
                 confirmation_token=args.get("confirmation_token", ""),
                 confirmed=bool(args.get("confirmed", False)),
+            )
+        if action == "download":
+            return api.download_attachment(
+                message_id=args.get("message_id", ""),
+                attachment_id=args.get("attachment_id", ""),
+                output=args.get("output", ""),
+                attachment=args.get("attachment"),
             )
         if action == "trash":
             return api.trash_message(
