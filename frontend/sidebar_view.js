@@ -156,8 +156,7 @@ export default {
       folders: FOLDERS,
       loading: false,
       error: "",
-      tab: "inbox", // inbox / history / pending / tools
-      toolTab: "send", // send / reply / forward / manage（工具面板内部）
+      tab: "inbox", // inbox / history / pending
       // 收件箱
       folder: "inbox",
       messages: [],
@@ -390,10 +389,6 @@ export default {
     },
     async refresh() {
       await this.switchTab(this.tab);
-    },
-    async openManage() {
-      this.toolTab = "manage";
-      if (this.messages.length === 0) await this.loadMessages(true);
     },
     toggleThread(key) {
       this.expandedThreads[key] = !this.isThreadExpanded(key);
@@ -728,7 +723,6 @@ export default {
       <button :style="tab==='inbox'?btnPrimary:btnBase" @click="switchTab('inbox')">邮件</button>
       <button :style="tab==='history'?btnPrimary:btnBase" @click="switchTab('history')">留痕</button>
       <button :style="tab==='pending'?btnPrimary:btnBase" @click="switchTab('pending')">待确认</button>
-      <button :style="tab==='tools'?btnPrimary:btnBase" @click="switchTab('tools')">工具</button>
     </div>
     <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
     <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
