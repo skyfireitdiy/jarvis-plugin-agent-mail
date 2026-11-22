@@ -238,6 +238,30 @@ export default {
         this.selected = payload.data || msg;
       });
     },
+    // 下载附件到插件数据目录 attachments/（大附件无 attachment_id 时提示用链接）
+    async downloadAttachment(att) {
+      const msg = this.selected || {};
+      const attId = att.attachment_id || att.id || "";
+      if (!attId) {
+        const url = att.download_url || "";
+        if (url) {
+          this.toast("大附件不支持直接下载，请点击链接在浏览器中打开", "info");
+          window.open(url, "_blank");
+        } else {
+          this.toast("该附件缺少 attachment_id，无法下载", "error");
+        }
+        return;
+      }
+      await this.guard(async () => {
+        const payload = await callFunction("download_attachment", {
+          message_id: msg.id || msg.message_id,
+          attachment_id: attId,
+        });
+        const data = payload.data || {};
+        const saved = data.path || data.file || data.filename || "";
+        this.toast(saved ? `附件已下载：${saved}` : "附件已下载", "success");
+      });
+    },
     async search() {
       this.page = 1;
       if (!this.searchQuery.trim()) {
@@ -412,7 +436,13 @@ export default {
           <div style="color:var(--color-text-secondary);">发件人：{{ selected.sender || selected.from || '未知' }}</div>
           <div style="color:var(--color-text-secondary);">ID：{{ selected.id }}</div>
           <div v-if="selected.attachments && selected.attachments.length" style="color:var(--color-text-secondary);">
-            附件：{{ selected.attachments.map(a => a.name || a.filename).join('、') }}
+            <div style="margin-bottom:4px;">附件：</div>
+            <div v-for="att in selected.attachments" :key="att.attachment_id || att.id || att.filename || att.name"
+                 style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
+              <span>{{ att.filename || att.name || '未命名附件' }}</span>
+              <span v-if="att.size" style="font-size:10px;opacity:0.8;">{{ (att.size/1024).toFixed(1) }}KB</span>
+              <button :style="btnBase" @click="downloadAttachment(att)" :disabled="loading">下载</button>
+            </div>
           </div>
           <pre style="white-space:pre-wrap;word-break:break-word;margin-top:6px;font-family:inherit;">{{ selectedBody }}</pre>
         </div>

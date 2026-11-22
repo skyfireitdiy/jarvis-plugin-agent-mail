@@ -68,6 +68,9 @@ _PROMPT_INJECTION_GUARD = (
 # 写操作命令集合（需两阶段确认）
 _WRITE_COMMANDS = ("send", "reply", "forward", "trash", "delete")
 
+# 附件单文件大小上限（CLI 限制单附件 ≤10MB）
+_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+
 # 进程内写锁（数据文件并发读写）
 _LOCK = threading.RLock()
 
@@ -143,12 +146,15 @@ def _cli_available() -> bool:
     return _CLI_CACHE
 
 
-def _run_cli(args: List[str], timeout: int = 60) -> Dict[str, Any]:
+def _run_cli(args: List[str], timeout: int = 60, cwd: Optional[str] = None) -> Dict[str, Any]:
     """执行 agently-cli 子进程，统一处理退出码语义。
 
     退出码语义：0 成功 / 1 服务端错误可重试 / 2 参数不合规不重试 /
     3 授权失效 / 4 本地网络可重试 / 6 业务永久拒绝 / 7 限频 /
     8 缺 confirmation-token。
+
+    cwd：子进程工作目录。agently-cli 的附件路径（--attachment/--file/--output）
+    只接受相对路径，以子进程 cwd 为基准；传 cwd 可让路径可控。
     """
     if not _cli_available():
         return _err(
@@ -161,6 +167,7 @@ def _run_cli(args: List[str], timeout: int = 60) -> Dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
         )
     except FileNotFoundError:
         return _err(
@@ -440,11 +447,13 @@ def send_message(
     to: str,
     subject: str = "",
     body: str = "",
+    attachments: Any = None,
     confirmation_token: str = "",
     confirmed: bool = False,
 ) -> Dict[str, Any]:
     """发送新邮件（agently-cli message +send）。
 
+    attachments：附件路径列表（相对 _attachments_dir() 目录，可传单个字符串）。
     写操作：需要 confirmation-token；用户已授权时可传 confirmed=True 免除。
     """
     if not to:
@@ -454,32 +463,44 @@ def send_message(
         args += ["--subject", str(subject)]
     if body:
         args += ["--body", str(body)]
-    return _apply_confirmation(args, confirmation_token, confirmed)
+    _append_attachment_args(args, attachments)
+    return _apply_confirmation(args, confirmation_token, confirmed, cwd=_attachments_dir())
 
 
 def reply_message(
     message_id: str,
     body: str = "",
+    attachments: Any = None,
     confirmation_token: str = "",
     confirmed: bool = False,
 ) -> Dict[str, Any]:
-    """回复某封邮件（agently-cli message +reply --id）。"""
+    """回复某封邮件（agently-cli message +reply --id）。
+
+    attachments：附件路径列表（相对 _attachments_dir() 目录，可传单个字符串）。
+    """
     if not message_id:
         return _err("缺少 message_id", "INVALID_ARGUMENT")
     args = ["message", "+reply", "--id", str(message_id)]
     if body:
         args += ["--body", str(body)]
-    return _apply_confirmation(args, confirmation_token, confirmed)
+    _append_attachment_args(args, attachments)
+    return _apply_confirmation(args, confirmation_token, confirmed, cwd=_attachments_dir())
 
 
 def forward_message(
     message_id: str,
     to: str,
     body: str = "",
+    attachments: Any = None,
+    include_attachments: bool = False,
     confirmation_token: str = "",
     confirmed: bool = False,
 ) -> Dict[str, Any]:
-    """转发某封邮件（agently-cli message +forward --id --to）。"""
+    """转发某封邮件（agently-cli message +forward --id --to）。
+
+    attachments：额外附件路径列表（相对 _attachments_dir() 目录）。
+    include_attachments：是否携带原邮件附件（--include-attachments）。
+    """
     if not message_id:
         return _err("缺少 message_id", "INVALID_ARGUMENT")
     if not to:
@@ -487,7 +508,10 @@ def forward_message(
     args = ["message", "+forward", "--id", str(message_id), "--to", str(to)]
     if body:
         args += ["--body", str(body)]
-    return _apply_confirmation(args, confirmation_token, confirmed)
+    if include_attachments:
+        args.append("--include-attachments")
+    _append_attachment_args(args, attachments)
+    return _apply_confirmation(args, confirmation_token, confirmed, cwd=_attachments_dir())
 
 
 def trash_message(message_id: str, confirmation_token: str = "", confirmed: bool = False) -> Dict[str, Any]:
@@ -506,13 +530,18 @@ def delete_message(message_id: str, confirmation_token: str = "", confirmed: boo
     return _apply_confirmation(args, confirmation_token, confirmed)
 
 
-def _apply_confirmation(args: List[str], confirmation_token: str, confirmed: bool) -> Dict[str, Any]:
+def _apply_confirmation(
+    args: List[str],
+    confirmation_token: str,
+    confirmed: bool,
+    cwd: Optional[str] = None,
+) -> Dict[str, Any]:
     """为写操作附加两阶段确认参数。"""
     if confirmed:
         args.append("--confirmed")
     elif confirmation_token:
         args += ["--confirmation-token", str(confirmation_token)]
-    return _run_cli(args)
+    return _run_cli(args, cwd=cwd)
 
 
 # ---------------------------------------------------------------------------
@@ -520,11 +549,95 @@ def _apply_confirmation(args: List[str], confirmation_token: str, confirmed: boo
 # ---------------------------------------------------------------------------
 
 
-def download_attachment(message_id: str, attachment_id: str, output: str = "") -> Dict[str, Any]:
+def _attachments_dir() -> str:
+    """附件上传/下载基准目录（插件数据目录 attachments/）。"""
+    path = os.path.join(_data_dir(), "attachments")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _append_attachment_args(args: List[str], attachments: Any) -> None:
+    """把附件路径列表拼接到 CLI 参数（--attachment，可重复）。
+
+    附件路径以 _attachments_dir() 为基准（相对路径），CLI 只接受相对路径。
+    """
+    if not attachments:
+        return
+    if isinstance(attachments, str):
+        attachments = [attachments]
+    for att in attachments:
+        att = str(att or "").strip()
+        if not att:
+            continue
+        # 拒绝绝对路径（CLI 会拒绝，且避免越权读取任意路径）
+        if os.path.isabs(att):
+            continue
+        args += ["--attachment", att]
+
+
+def upload_attachment(filename: str, data: str) -> Dict[str, Any]:
+    """上传附件到插件数据目录 attachments/（前端发送面板用）。
+
+    filename：文件名（仅取 basename，防路径穿越）。
+    data：文件内容 base64 编码字符串（兼容 dataURL 前缀）。
+    返回相对 _attachments_dir() 的文件名，供 send/reply/forward 的 attachments 使用。
+    """
+    import base64 as _b64
+
+    filename = str(filename or "").strip().replace("\\", "/").split("/")[-1]
+    if not filename:
+        return _err("缺少文件名", "INVALID_ARGUMENT")
+    raw_data = str(data or "")
+    if not raw_data:
+        return _err("缺少文件内容", "INVALID_ARGUMENT")
+    # 兼容 dataURL 前缀（data:...;base64,xxxx）
+    if "," in raw_data and raw_data.strip().lower().startswith("data:"):
+        raw_data = raw_data.split(",", 1)[1]
+    try:
+        file_bytes = _b64.b64decode(raw_data, validate=True)
+    except Exception:
+        return _err("文件内容不是合法的 base64", "INVALID_ARGUMENT")
+    if not file_bytes:
+        return _err("文件内容为空", "INVALID_ARGUMENT")
+    if len(file_bytes) > _MAX_ATTACHMENT_SIZE:
+        return _err("附件超过 10MB 上限", "FILE_TOO_LARGE")
+    att_dir = _attachments_dir()
+    # 同名文件加时间戳后缀，避免覆盖已有附件
+    name, ext = os.path.splitext(filename)
+    target = os.path.join(att_dir, filename)
+    if os.path.exists(target):
+        target = os.path.join(att_dir, f"{name}_{int(time.time())}{ext}")
+    with open(target, "wb") as f:
+        f.write(file_bytes)
+    return _ok({"filename": os.path.basename(target), "size": len(file_bytes)})
+
+
+def download_attachment(
+    message_id: str,
+    attachment_id: str = "",
+    output: str = "",
+    attachment: Any = None,
+) -> Dict[str, Any]:
     """下载指定附件（agently-cli attachment +download --msg --att --output）。
 
     未指定 output 时下载到插件数据目录 attachments/ 下。
+    大附件分支：message +read 返回的附件只有 download_url 而无 attachment_id 时，
+    不支持 +download，直接返回下载链接（传 attachment 附件对象可自动识别）。
     """
+    # 大附件分支：无 attachment_id 但有 download_url 时返回链接
+    if not attachment_id and isinstance(attachment, dict):
+        attachment_id = str(attachment.get("attachment_id") or attachment.get("id") or "")
+        if not attachment_id:
+            url = attachment.get("download_url") or ""
+            if url:
+                return _ok(
+                    {
+                        "download_url": url,
+                        "filename": attachment.get("filename") or attachment.get("name") or "",
+                        "size": attachment.get("size", 0),
+                        "note": "大附件不支持直接下载，请用浏览器打开链接",
+                    }
+                )
     if not message_id or not attachment_id:
         return _err("缺少 message_id 或 attachment_id", "INVALID_ARGUMENT")
     if not output:
@@ -1320,6 +1433,7 @@ PUBLIC_FUNCTIONS: List[str] = [
     "trash_message",
     "delete_message",
     # 附件
+    "upload_attachment",
     "download_attachment",
     # 设置
     "get_settings",
