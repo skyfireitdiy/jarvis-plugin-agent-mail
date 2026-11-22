@@ -1,9 +1,18 @@
-// Agent Mail 插件 - 侧边栏收件箱视图。
+// Agent Mail 插件 - 侧边栏视图（对齐主流邮件客户端的收发体验）。
 // 约定：纯浏览器 ES module，用 window.Vue 渲染，导出 default 组件，不 import 'vue'。
-// 功能：查看邮箱消息列表、读取邮件详情、搜索邮件、查看处理留痕与待确认队列。
+// 功能：文件夹切换、未读/星标、多选批量操作、邮件详情操作栏（回复/回复全部/转发）、
+//      写信（抄送/密送/附件）、处理留痕与待确认队列。
 // 认证：通过 window.__jarvisFetch 调用 gateway 插件功能代理端点，不直接访问邮箱服务。
 
 const PLUGIN = "agent-mail";
+
+// 文件夹定义（dir 与 agently-cli --dir 一致）
+const FOLDERS = [
+  { dir: "inbox", label: "收件箱" },
+  { dir: "sent", label: "已发送" },
+  { dir: "trash", label: "回收站" },
+  { dir: "spam", label: "垃圾邮件" },
+];
 
 // 规范化主题：去掉 Re:/Fw:/Fwd:/回复:/转发: 等前缀（可重复嵌套），用于会话归组
 function normalizeSubject(subject) {
@@ -18,12 +27,38 @@ function normalizeSubject(subject) {
   }
   return s;
 }
-// 会话归组：同主题（去前缀）视为一个会话，跨联系人（Gmail 风格）
+// 会话归组：同主题（去前缀）视为一个会话
 function threadContact(m) {
   return (m && m.from_email) || (m && m.from) || (m && m.sender) || "未知";
 }
 function threadKey(m) {
   return normalizeSubject(m.subject);
+}
+// 把地址数组（[{email,name}] 或字符串数组）转成逗号分隔字符串
+function addrToString(list) {
+  if (!list) return "";
+  if (typeof list === "string") return list;
+  if (!Array.isArray(list)) return String(list);
+  return list
+    .map((it) =>
+      it && typeof it === "object" ? it.email || it.name || "" : String(it || ""),
+    )
+    .filter(Boolean)
+    .join(", ");
+}
+// 格式化时间为简洁显示（今天显示 HH:MM，否则 MM-DD）
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ");
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const pad = (n) => String(n).padStart(2, "0");
+  if (sameDay) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // 解析 gateway 地址（与 App.vue 一致）
@@ -118,18 +153,27 @@ export default {
         "padding:4px 10px;background:var(--color-accent);color:#060911;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;",
       btnDanger:
         "padding:3px 8px;background:var(--color-bg-tertiary);color:var(--color-error);border:1px solid var(--color-border-subtle);border-radius:4px;cursor:pointer;font-size:11px;",
+      folders: FOLDERS,
       loading: false,
       error: "",
       tab: "inbox", // inbox / history / pending / tools
       toolTab: "send", // send / reply / forward / manage（工具面板内部）
       // 收件箱
+      folder: "inbox",
       messages: [],
       selected: null,
       page: 1,
       pageSize: 20,
       searchQuery: "",
+      unreadOnly: false,
+      // 多选
+      selectedIds: {},
+      // 写信/回复/转发
+      compose: null, // {mode, to, cc, bcc, subject, body, message_id, attachments:[]}
       // 工具（发送/回复/转发/管理）
       to: "",
+      cc: "",
+      bcc: "",
       subject: "",
       body: "",
       messageId: "",
@@ -161,13 +205,12 @@ export default {
           }
         });
         let text = doc.body ? doc.body.textContent || "" : "";
-        // 折叠多余空白
         text = text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
         return text || raw;
       }
       return raw;
     },
-    // 会话分组：同联系人+同主题（去前缀）归为一组，按最新邮件时间倒序
+    // 会话分组：同主题（去前缀）归为一组，按最新邮件时间倒序
     threads() {
       const groups = new Map();
       for (const m of this.messages) {
@@ -177,26 +220,44 @@ export default {
       }
       const list = [];
       for (const [key, msgs] of groups) {
-        // 会话内按时间正序（最旧在上，Gmail 风格）
-        msgs.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+        msgs.sort((a, b) =>
+          String(a.created_at || "").localeCompare(String(b.created_at || "")),
+        );
         const latest = msgs[msgs.length - 1];
         list.push({
           key,
-          subject: normalizeSubject(msgs[0].subject),
+          subject: normalizeSubject(msgs[0].subject) || msgs[0].subject,
           contact: threadContact(latest),
           messages: msgs,
           count: msgs.length,
           latest,
+          unread: msgs.some((m) => m.is_read === false),
+          starred: msgs.some((m) => m.starred === true),
         });
       }
       list.sort((a, b) =>
-        String(b.latest.created_at || "").localeCompare(String(a.latest.created_at || "")),
+        String(b.latest.created_at || "").localeCompare(
+          String(a.latest.created_at || ""),
+        ),
       );
       return list;
     },
+    unreadCount() {
+      return this.messages.filter((m) => m.is_read === false).length;
+    },
+    selectedCount() {
+      return Object.keys(this.selectedIds).filter((k) => this.selectedIds[k]).length;
+    },
+    selectedIdList() {
+      return Object.keys(this.selectedIds).filter((k) => this.selectedIds[k]);
+    },
+    allSelected() {
+      return this.messages.length > 0 && this.selectedCount === this.messages.length;
+    },
   },
   methods: {
-    // 是否展开某会话（默认折叠，点击会话头后展开）
+    fmtTime,
+    addrToString,
     isThreadExpanded(key) {
       return this.expandedThreads[key] === true;
     },
@@ -221,14 +282,24 @@ export default {
         const payload = await callFunction("list_messages", {
           page: this.page,
           page_size: this.pageSize,
+          dir: this.folder,
+          unread_only: this.unreadOnly,
         });
         const data = payload.data || {};
         this.messages = data.messages || data.items || data.list || [];
+        this.selectedIds = {};
         if (!silent && this.messages.length === 0 && this.error === "") {
           this.error =
-            "收件箱为空，或未安装 agently-cli / 未登录。请先在管理设置中检查授权状态。";
+            "当前文件夹为空，或未安装 agently-cli / 未登录。请先在管理设置中检查授权状态。";
         }
       });
+    },
+    async switchFolder(dir) {
+      this.folder = dir;
+      this.page = 1;
+      this.searchQuery = "";
+      this.selected = null;
+      await this.loadMessages();
     },
     async openMessage(msg) {
       await this.guard(async () => {
@@ -272,9 +343,12 @@ export default {
           query: this.searchQuery.trim(),
           page: this.page,
           page_size: this.pageSize,
+          dir: this.folder,
+          unread_only: this.unreadOnly,
         });
         const data = payload.data || {};
         this.messages = data.messages || data.items || data.list || [];
+        this.selectedIds = {};
       });
     },
     async loadHistory() {
@@ -291,6 +365,8 @@ export default {
     },
     async switchTab(tab) {
       this.tab = tab;
+      this.selected = null;
+      this.compose = null;
       if (tab === "inbox") await this.loadMessages();
       else if (tab === "history") await this.loadHistory();
       else if (tab === "pending") await this.loadPending();
@@ -322,7 +398,234 @@ export default {
     toggleThread(key) {
       this.expandedThreads[key] = !this.isThreadExpanded(key);
     },
-    // ---- 工具：发送/回复/转发/管理 ----
+    // ---- 星标 / 多选 / 批量 ----
+    isSelected(id) {
+      return this.selectedIds[id] === true;
+    },
+    toggleSelect(id) {
+      this.selectedIds = { ...this.selectedIds, [id]: !this.isSelected(id) };
+    },
+    toggleSelectAll() {
+      if (this.allSelected) {
+        this.selectedIds = {};
+      } else {
+        const next = {};
+        for (const m of this.messages) next[m.id] = true;
+        this.selectedIds = next;
+      }
+    },
+    async toggleStar(m) {
+      const target = !m.starred;
+      await this.guard(async () => {
+        await callFunction("set_starred", { message_id: m.id, starred: target });
+        m.starred = target;
+        if (this.selected && this.selected.id === m.id) this.selected.starred = target;
+      });
+    },
+    async batchAction(action) {
+      const ids = this.selectedIdList;
+      if (!ids.length) return;
+      const labels = {
+        read: "标记已读",
+        unread: "标记未读",
+        star: "加星",
+        unstar: "取消星",
+        trash: "移入回收站",
+        delete: "永久删除",
+      };
+      if (action === "trash" || action === "delete") {
+        const tip =
+          action === "delete"
+            ? `永久删除选中的 ${ids.length} 封邮件？此操作不可恢复！`
+            : `将选中的 ${ids.length} 封邮件移入回收站？`;
+        const ok = window.__jarvisConfirm
+          ? await window.__jarvisConfirm(tip, { defaultConfirm: false })
+          : confirm(tip);
+        if (!ok) return;
+      }
+      await this.guard(async () => {
+        await callFunction("batch_message_action", {
+          message_ids: ids,
+          action: action,
+          confirmed: true,
+        });
+        this.toast(`已${labels[action] || action}：${ids.length} 封`);
+        await this.loadMessages(true);
+      });
+    },
+    // ---- 写信 / 回复 / 转发 ----
+    openCompose(mode, msg) {
+      const m = msg || this.selected || {};
+      const base = {
+        mode,
+        to: "",
+        cc: "",
+        bcc: "",
+        subject: "",
+        body: "",
+        message_id: m.id || m.message_id || "",
+        attachments: [],
+      };
+      if (mode === "send") {
+        this.compose = base;
+      } else if (mode === "reply" || mode === "reply_all") {
+        base.to = m.from_email || m.sender || "";
+        base.subject = /^re\s*[:：]/i.test(m.subject || "")
+          ? m.subject
+          : `Re: ${m.subject || ""}`;
+        if (mode === "reply_all") {
+          const others = (m.to || [])
+            .map((it) =>
+              it && typeof it === "object" ? it.email : String(it || ""),
+            )
+            .filter((e) => e && e !== base.to);
+          base.cc = others.join(", ");
+        }
+        base.body = `\n\n---------- 原邮件 ----------\n发件人：${
+          m.sender || m.from || ""
+        }\n时间：${m.created_at || ""}\n\n${m.body || m.snippet || ""}`;
+        this.compose = base;
+      } else if (mode === "forward") {
+        base.subject = /^fw(d)?\s*[:：]/i.test(m.subject || "")
+          ? m.subject
+          : `Fw: ${m.subject || ""}`;
+        base.body = `\n\n---------- 转发邮件 ----------\n发件人：${
+          m.sender || m.from || ""
+        }\n时间：${m.created_at || ""}\n\n${m.body || m.snippet || ""}`;
+        this.compose = base;
+      }
+      this.tab = "inbox";
+    },
+    cancelCompose() {
+      this.compose = null;
+    },
+    readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+        reader.readAsDataURL(file);
+      });
+    },
+    async onPickAttachments(event) {
+      const files = Array.from(event.target.files || []);
+      event.target.value = "";
+      if (!files.length || !this.compose) return;
+      for (const file of files) {
+        try {
+          const data = await this.readFileAsDataUrl(file);
+          const payload = await callFunction("upload_attachment", {
+            filename: file.name,
+            data,
+          });
+          const info = (payload && payload.data) || {};
+          if (info.filename) {
+            this.compose.attachments.push(info.filename);
+            this.toast(`已添加附件：${info.filename}`);
+          } else {
+            this.error = `上传失败：${file.name}`;
+          }
+        } catch (e) {
+          this.error = `上传失败 ${file.name}：${e.message || e}`;
+        }
+      }
+    },
+    removeComposeAttachment(name) {
+      if (!this.compose) return;
+      this.compose.attachments = this.compose.attachments.filter((n) => n !== name);
+    },
+    async submitCompose() {
+      const c = this.compose;
+      if (!c) return;
+      if (!c.to.trim()) {
+        this.error = "请填写收件人";
+        return;
+      }
+      if (c.mode !== "forward" && !c.body.trim()) {
+        this.error = "请填写正文";
+        return;
+      }
+      const attachments = c.attachments.length ? c.attachments.slice() : undefined;
+      const cc = c.cc.trim() || undefined;
+      const bcc = c.bcc.trim() || undefined;
+      await this.guard(async () => {
+        let payload;
+        if (c.mode === "send") {
+          payload = await callFunction("send_message", {
+            to: c.to.trim(),
+            cc,
+            bcc,
+            subject: c.subject,
+            body: c.body,
+            attachments,
+            confirmed: true,
+          });
+        } else if (c.mode === "forward") {
+          payload = await callFunction("forward_message", {
+            message_id: c.message_id,
+            to: c.to.trim(),
+            cc,
+            bcc,
+            body: c.body,
+            attachments,
+            confirmed: true,
+          });
+        } else {
+          payload = await callFunction("reply_message", {
+            message_id: c.message_id,
+            body: c.body,
+            cc,
+            bcc,
+            attachments,
+            reply_all: c.mode === "reply_all",
+            confirmed: true,
+          });
+        }
+        this.result = JSON.stringify(payload.data || payload, null, 2);
+        this.toast(
+          c.mode === "send"
+            ? "邮件已发送"
+            : c.mode === "forward"
+              ? "邮件已转发"
+              : "回复已发送",
+        );
+        this.compose = null;
+        this.selected = null;
+        await this.loadMessages(true);
+      });
+    },
+    // ---- 详情页快捷操作 ----
+    async quickTrash() {
+      const m = this.selected;
+      if (!m) return;
+      const ok = window.__jarvisConfirm
+        ? await window.__jarvisConfirm("将该邮件移入回收站？", { defaultConfirm: true })
+        : confirm("将该邮件移入回收站？");
+      if (!ok) return;
+      await this.guard(async () => {
+        await callFunction("trash_message", { message_id: m.id, confirmed: true });
+        this.toast("已移入回收站");
+        this.selected = null;
+        await this.loadMessages(true);
+      });
+    },
+    async quickDelete() {
+      const m = this.selected;
+      if (!m) return;
+      const ok = window.__jarvisConfirm
+        ? await window.__jarvisConfirm("永久删除该邮件？此操作不可恢复！", {
+            defaultConfirm: false,
+          })
+        : confirm("永久删除该邮件？此操作不可恢复！");
+      if (!ok) return;
+      await this.guard(async () => {
+        await callFunction("delete_message", { message_id: m.id, confirmed: true });
+        this.toast("邮件已删除");
+        this.selected = null;
+        await this.loadMessages(true);
+      });
+    },
+    // ---- 工具：发送/回复/转发/管理（手动表单） ----
     async doSend() {
       if (!this.to.trim()) {
         this.error = "请填写收件人";
@@ -331,6 +634,8 @@ export default {
       await this.guard(async () => {
         const payload = await callFunction("send_message", {
           to: this.to.trim(),
+          cc: this.cc.trim() || undefined,
+          bcc: this.bcc.trim() || undefined,
           subject: this.subject,
           body: this.body,
           confirmed: this.confirmed,
@@ -348,6 +653,8 @@ export default {
         const payload = await callFunction("reply_message", {
           message_id: this.messageId.trim(),
           body: this.body,
+          cc: this.cc.trim() || undefined,
+          bcc: this.bcc.trim() || undefined,
           confirmed: this.confirmed,
         });
         this.result = JSON.stringify(payload.data || payload, null, 2);
@@ -412,10 +719,13 @@ export default {
   <div class="agent-mail-sidebar" style="height:100%;overflow-y:auto;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <strong>📬 Agent Mail</strong>
-      <button :style="btnBase" @click="refresh" :disabled="loading">刷新</button>
+      <span style="display:flex;gap:6px;align-items:center;">
+        <button :style="btnPrimary" @click="openCompose('send')">✏️ 写信</button>
+        <button :style="btnBase" @click="refresh" :disabled="loading">刷新</button>
+      </span>
     </div>
     <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;">
-      <button :style="tab==='inbox'?btnPrimary:btnBase" @click="switchTab('inbox')">收件箱</button>
+      <button :style="tab==='inbox'?btnPrimary:btnBase" @click="switchTab('inbox')">邮件</button>
       <button :style="tab==='history'?btnPrimary:btnBase" @click="switchTab('history')">留痕</button>
       <button :style="tab==='pending'?btnPrimary:btnBase" @click="switchTab('pending')">待确认</button>
       <button :style="tab==='tools'?btnPrimary:btnBase" @click="switchTab('tools')">工具</button>
@@ -423,19 +733,69 @@ export default {
     <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
     <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
 
-    <!-- 收件箱 -->
     <div v-if="tab==='inbox'">
-      <div style="display:flex;gap:6px;margin-bottom:8px;">
-        <input class="jarvis-input" v-model="searchQuery" placeholder="搜索邮件…" @keyup.enter="search" style="flex:1;" />
-        <button :style="btnBase" @click="search">搜索</button>
+      <!-- 写信 / 回复 / 转发 -->
+      <div v-if="compose">
+        <div style="font-size:12px;font-weight:bold;margin-bottom:6px;">
+          {{ compose.mode==='send' ? '写信' : compose.mode==='forward' ? '转发' : (compose.mode==='reply_all' ? '回复全部' : '回复') }}
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">收件人</div>
+          <input class="jarvis-input" v-model="compose.to" placeholder="收件人邮箱（多个用逗号分隔）" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <div style="flex:1;">
+            <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">抄送</div>
+            <input class="jarvis-input" v-model="compose.cc" placeholder="抄送（可选）" style="width:100%;box-sizing:border-box;" />
+          </div>
+          <div style="flex:1;">
+            <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">密送</div>
+            <input class="jarvis-input" v-model="compose.bcc" placeholder="密送（可选）" style="width:100%;box-sizing:border-box;" />
+          </div>
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">主题</div>
+          <input class="jarvis-input" v-model="compose.subject" placeholder="主题" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div style="margin-bottom:6px;">
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">正文</div>
+          <textarea class="jarvis-input" v-model="compose.body" rows="8" placeholder="邮件正文" style="width:100%;box-sizing:border-box;"></textarea>
+        </div>
+        <div style="margin-bottom:6px;">
+          <button :style="btnBase" @click="$refs.composeAttInput.click()">📎 添加附件</button>
+          <input ref="composeAttInput" type="file" multiple style="display:none;" @change="onPickAttachments" />
+          <span v-if="compose.attachments.length" style="font-size:11px;color:var(--color-text-secondary);margin-left:6px;">{{ compose.attachments.length }} 个附件</span>
+        </div>
+        <div v-if="compose.attachments.length" style="margin-bottom:6px;">
+          <span v-for="name in compose.attachments" :key="name"
+                style="display:inline-block;background:var(--color-bg-tertiary);border:1px solid var(--color-border-subtle);border-radius:4px;padding:2px 6px;margin:0 4px 4px 0;font-size:11px;">
+            {{ name }} <a href="javascript:void(0)" @click="removeComposeAttachment(name)" style="color:var(--color-error);">✕</a>
+          </span>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button :style="btnPrimary" @click="submitCompose" :disabled="loading">发送</button>
+          <button :style="btnBase" @click="cancelCompose">取消</button>
+        </div>
       </div>
-      <div v-if="selected">
+
+      <!-- 详情 -->
+      <div v-else-if="selected">
         <button :style="btnBase" @click="selected=null" style="margin-bottom:6px;">← 返回列表</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+          <button :style="btnPrimary" @click="openCompose('reply', selected)">回复</button>
+          <button :style="btnBase" @click="openCompose('reply_all', selected)">回复全部</button>
+          <button :style="btnBase" @click="openCompose('forward', selected)">转发</button>
+          <button :style="btnBase" @click="toggleStar(selected)">{{ selected.starred ? '★ 已加星' : '☆ 加星' }}</button>
+          <button :style="btnBase" @click="quickTrash">移入回收站</button>
+          <button :style="btnDanger" @click="quickDelete">永久删除</button>
+        </div>
         <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;">
           <div><strong>{{ selected.subject || '（无主题）' }}</strong></div>
-          <div style="color:var(--color-text-secondary);">发件人：{{ selected.sender || selected.from || '未知' }}</div>
-          <div style="color:var(--color-text-secondary);">ID：{{ selected.id }}</div>
-          <div v-if="selected.attachments && selected.attachments.length" style="color:var(--color-text-secondary);">
+          <div style="color:var(--color-text-secondary);">发件人：{{ selected.from_name ? (selected.from_name + ' <' + selected.from_email + '>') : (selected.sender || selected.from || '未知') }}</div>
+          <div v-if="selected.to && selected.to.length" style="color:var(--color-text-secondary);">收件人：{{ addrToString(selected.to) }}</div>
+          <div v-if="selected.cc && selected.cc.length" style="color:var(--color-text-secondary);">抄送：{{ addrToString(selected.cc) }}</div>
+          <div style="color:var(--color-text-secondary);">时间：{{ selected.created_at || '-' }}</div>
+          <div v-if="selected.attachments && selected.attachments.length" style="color:var(--color-text-secondary);margin-top:4px;">
             <div style="margin-bottom:4px;">附件：</div>
             <div v-for="att in selected.attachments" :key="att.attachment_id || att.id || att.filename || att.name"
                  style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
@@ -447,31 +807,68 @@ export default {
           <pre style="white-space:pre-wrap;word-break:break-word;margin-top:6px;font-family:inherit;">{{ selectedBody }}</pre>
         </div>
       </div>
+
+      <!-- 列表 -->
       <div v-else>
+        <!-- 文件夹切换 + 未读过滤 -->
+        <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
+          <button v-for="f in folders" :key="f.dir"
+                  :style="folder===f.dir?btnPrimary:btnBase"
+                  @click="switchFolder(f.dir)">{{ f.label }}</button>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-left:auto;">
+            <input type="checkbox" v-model="unreadOnly" @change="loadMessages()" /> 仅未读
+          </label>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;">
+          <input class="jarvis-input" v-model="searchQuery" placeholder="搜索邮件…" @keyup.enter="search" style="flex:1;" />
+          <button :style="btnBase" @click="search">搜索</button>
+        </div>
+        <!-- 批量操作栏 -->
+        <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--color-text-secondary);">
+          <label style="display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /> 全选
+          </label>
+          <span v-if="unreadCount>0" style="color:var(--color-accent);">未读 {{ unreadCount }}</span>
+          <span v-if="selectedCount>0" style="margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;">
+            <button :style="btnBase" @click="batchAction('read')">已读</button>
+            <button :style="btnBase" @click="batchAction('unread')">未读</button>
+            <button :style="btnBase" @click="batchAction('star')">★</button>
+            <button :style="btnBase" @click="batchAction('unstar')">☆</button>
+            <button :style="btnBase" @click="batchAction('trash')">移入回收站</button>
+            <button :style="btnDanger" @click="batchAction('delete')">删除</button>
+          </span>
+        </div>
         <div v-if="threads.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无邮件</div>
         <div v-for="t in threads" :key="t.key" style="border:1px solid var(--color-border);border-radius:6px;margin-bottom:6px;overflow:hidden;">
-          <!-- 会话头 -->
-          <div @click="toggleThread(t.key)" style="padding:6px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:6px;">
-            <div style="min-width:0;">
-              <div style="font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          <div @click="toggleThread(t.key)" style="padding:6px;cursor:pointer;display:flex;align-items:center;gap:6px;">
+            <span style="flex-shrink:0;font-size:12px;">{{ isThreadExpanded(t.key) ? '▾' : '▸' }}</span>
+            <div style="min-width:0;flex:1;">
+              <div :style="t.unread ? 'font-size:12px;font-weight:bold;' : 'font-size:12px;'" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                <span v-if="t.unread" style="color:var(--color-accent);">●</span>
+                <span v-if="t.starred" style="color:#f5a623;">★</span>
                 {{ t.subject || '（无主题）' }}
                 <span v-if="t.count>1" style="color:var(--color-text-secondary);font-weight:normal;"> ({{ t.count }})</span>
+                <span v-if="t.latest.has_attachments" style="font-size:10px;">📎</span>
               </div>
               <div style="font-size:11px;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                 {{ t.contact }} · {{ (t.latest.snippet || t.latest.body || '').slice(0, 60) }}
               </div>
             </div>
-            <span style="font-size:11px;color:var(--color-text-secondary);flex-shrink:0;">{{ isThreadExpanded(t.key) ? '▾' : '▸' }}</span>
+            <span style="font-size:10px;color:var(--color-text-secondary);flex-shrink:0;">{{ fmtTime(t.latest.created_at) }}</span>
           </div>
-          <!-- 会话内邮件列表 -->
           <div v-if="isThreadExpanded(t.key)">
-            <div v-for="m in t.messages" :key="m.id" @click.stop="openMessage(m)"
-                 style="padding:5px 6px 5px 16px;border-top:1px dashed var(--color-border);cursor:pointer;">
-              <div style="font-size:11px;color:var(--color-text-secondary);">
-                {{ m.sender || m.from || '未知' }}
-                <span v-if="t.count>1" style="float:right;">{{ m.created_at || '' }}</span>
+            <div v-for="m in t.messages" :key="m.id"
+                 style="padding:5px 6px 5px 12px;border-top:1px dashed var(--color-border);display:flex;align-items:center;gap:6px;">
+              <input type="checkbox" :checked="isSelected(m.id)" @change="toggleSelect(m.id)" @click.stop />
+              <span @click.stop="toggleStar(m)" style="cursor:pointer;font-size:12px;" :style="m.starred ? 'color:#f5a623;' : 'color:var(--color-text-secondary);'">{{ m.starred ? '★' : '☆' }}</span>
+              <div style="min-width:0;flex:1;cursor:pointer;" @click="openMessage(m)">
+                <div :style="m.is_read===false ? 'font-size:11px;font-weight:bold;' : 'font-size:11px;'" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                  {{ m.from_name || m.sender || m.from || '未知' }}
+                  <span v-if="m.has_attachments" style="font-size:10px;">📎</span>
+                </div>
+                <div style="font-size:11px;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>
               </div>
-              <div style="font-size:11px;">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>
+              <span style="font-size:10px;color:var(--color-text-secondary);flex-shrink:0;">{{ fmtTime(m.created_at) }}</span>
             </div>
           </div>
         </div>
@@ -499,98 +896,6 @@ export default {
           <button :style="btnBase" @click="resolvePending(p,'reject')">拒绝</button>
           <button :style="btnDanger" @click="resolvePending(p,'delete')">删除</button>
         </div>
-      </div>
-    </div>
-
-    <!-- 工具：发送/回复/转发/管理 -->
-    <div v-if="tab==='tools'">
-      <div style="margin-bottom:8px;display:flex;gap:6px;">
-        <button :style="toolTab==='send'?btnPrimary:btnBase" @click="toolTab='send'">发送</button>
-        <button :style="toolTab==='reply'?btnPrimary:btnBase" @click="toolTab='reply'">回复</button>
-        <button :style="toolTab==='forward'?btnPrimary:btnBase" @click="toolTab='forward'">转发</button>
-        <button :style="toolTab==='manage'?btnPrimary:btnBase" @click="openManage">管理</button>
-      </div>
-
-      <!-- 发送 -->
-      <div v-if="toolTab==='send'">
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">收件人</div>
-          <input class="jarvis-input" v-model="to" placeholder="收件人邮箱" style="width:100%;box-sizing:border-box;" />
-        </div>
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">主题</div>
-          <input class="jarvis-input" v-model="subject" placeholder="主题（可选）" style="width:100%;box-sizing:border-box;" />
-        </div>
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">正文</div>
-          <textarea class="jarvis-input" v-model="body" rows="5" placeholder="邮件正文" style="width:100%;box-sizing:border-box;"></textarea>
-        </div>
-        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
-          <input type="checkbox" v-model="confirmed" /> 已确认发送（跳过确认弹窗）
-        </label>
-        <button :style="btnPrimary" @click="doSend" :disabled="loading">发送</button>
-      </div>
-
-      <!-- 回复 -->
-      <div v-if="toolTab==='reply'">
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">message_id</div>
-          <input class="jarvis-input" v-model="messageId" placeholder="要回复的邮件 ID" style="width:100%;box-sizing:border-box;" />
-        </div>
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">回复正文</div>
-          <textarea class="jarvis-input" v-model="body" rows="5" placeholder="回复内容" style="width:100%;box-sizing:border-box;"></textarea>
-        </div>
-        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
-          <input type="checkbox" v-model="confirmed" /> 已确认（跳过确认弹窗）
-        </label>
-        <button :style="btnPrimary" @click="doReply" :disabled="loading">回复</button>
-      </div>
-
-      <!-- 转发 -->
-      <div v-if="toolTab==='forward'">
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">message_id</div>
-          <input class="jarvis-input" v-model="messageId" placeholder="要转发的邮件 ID" style="width:100%;box-sizing:border-box;" />
-        </div>
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">收件人</div>
-          <input class="jarvis-input" v-model="to" placeholder="转发给谁" style="width:100%;box-sizing:border-box;" />
-        </div>
-        <div style="margin-bottom:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">附言（可选）</div>
-          <textarea class="jarvis-input" v-model="body" rows="3" placeholder="转发附言" style="width:100%;box-sizing:border-box;"></textarea>
-        </div>
-        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
-          <input type="checkbox" v-model="confirmed" /> 已确认（跳过确认弹窗）
-        </label>
-        <button :style="btnPrimary" @click="doForward" :disabled="loading">转发</button>
-      </div>
-
-      <!-- 管理 -->
-      <div v-if="toolTab==='manage'">
-        <div style="margin-bottom:6px;font-size:11px;color:var(--color-text-secondary);">选择要操作的邮件（最近 20 封）：</div>
-        <div v-if="messages.length===0" style="color:var(--color-text-secondary);font-size:12px;">暂无邮件</div>
-        <div v-for="m in messages" :key="m.id"
-             @click="messageId=m.id"
-             style="border:1px solid var(--color-border);border-radius:6px;padding:6px;margin-bottom:6px;font-size:12px;cursor:pointer;"
-             :style="messageId===m.id ? 'border-color:var(--color-accent);' : ''">
-          <div><strong>{{ m.subject || '（无主题）' }}</strong></div>
-          <div style="color:var(--color-text-secondary);">发件人：{{ m.sender || m.from || '未知' }} · {{ m.created_at || '' }}</div>
-        </div>
-        <div style="margin-top:6px;">
-          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">选中的 message_id</div>
-          <input class="jarvis-input" v-model="messageId" placeholder="message_id" style="width:100%;box-sizing:border-box;" />
-        </div>
-        <div style="display:flex;gap:6px;margin-top:6px;">
-          <button :style="btnBase" @click="doTrash" :disabled="loading">移入回收站</button>
-          <button :style="btnDanger" @click="doDelete" :disabled="loading">永久删除</button>
-        </div>
-      </div>
-
-      <div v-if="result" style="margin-top:8px;border:1px solid var(--color-border);border-radius:6px;padding:6px;font-size:11px;white-space:pre-wrap;word-break:break-word;">
-        <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px;">结果：</div>
-        {{ result }}
       </div>
     </div>
   </div>

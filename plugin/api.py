@@ -5,6 +5,7 @@
 - 授权：auth_status / auth_login / auth_logout / me
 - 邮件：list_messages / read_message / search_messages / send_message /
   reply_message / forward_message / trash_message / delete_message
+- 星标与批量：set_starred / list_starred / batch_message_action
 - 附件：download_attachment
 - 自动处理规则：list_rules / create_rule / update_rule / delete_rule
 - 处理留痕：list_history / list_pending / resolve_pending
@@ -48,6 +49,10 @@ _PENDING_FILE = os.path.join(_DATA_DIR, "pending.json")
 _SETTINGS_FILE = os.path.join(_DATA_DIR, "settings.json")
 # 已处理消息 ID 去重（防止同一封邮件被重复派发）
 _SEEN_FILE = os.path.join(_DATA_DIR, "seen.json")
+# 本地星标（message_id 列表）
+_STARRED_FILE = os.path.join(_DATA_DIR, "starred.json")
+# 本地未读覆盖（{message_id: is_read}），CLI 无标记已读命令，用本地覆盖实现
+_UNREAD_FILE = os.path.join(_DATA_DIR, "unread_overrides.json")
 
 # 默认设置
 _DEFAULT_SETTINGS: Dict[str, Any] = {
@@ -277,10 +282,53 @@ def _parse_message_list(result: Dict[str, Any]) -> Dict[str, Any]:
     elif isinstance(data, list):
         messages = data
     return {
-        "messages": [_normalize_message(m) for m in messages if isinstance(m, dict)],
+        "messages": [
+            _apply_local_flags(_normalize_message(m))
+            for m in messages
+            if isinstance(m, dict)
+        ],
         "next_cursor": (pagination or {}).get("next_cursor", ""),
         "has_more": bool((pagination or {}).get("has_more", False)),
     }
+
+
+# ---------------------------------------------------------------------------
+# 本地标记（星标 / 未读覆盖）
+# ---------------------------------------------------------------------------
+
+
+def _load_starred() -> List[str]:
+    starred = _read_json(_STARRED_FILE, [])
+    return starred if isinstance(starred, list) else []
+
+
+def _save_starred(starred: List[str]) -> None:
+    with _LOCK:
+        _write_json(_STARRED_FILE, starred)
+
+
+def _load_unread_overrides() -> Dict[str, bool]:
+    overrides = _read_json(_UNREAD_FILE, {})
+    return overrides if isinstance(overrides, dict) else {}
+
+
+def _save_unread_overrides(overrides: Dict[str, bool]) -> None:
+    with _LOCK:
+        _write_json(_UNREAD_FILE, overrides)
+
+
+def _apply_local_flags(norm: Dict[str, Any]) -> Dict[str, Any]:
+    """把本地星标与未读覆盖合并进规范化消息结构。"""
+    if not isinstance(norm, dict):
+        return norm
+    mid = str(norm.get("id", "") or norm.get("message_id", "") or "")
+    if not mid:
+        return norm
+    norm["starred"] = mid in set(_load_starred())
+    overrides = _load_unread_overrides()
+    if mid in overrides:
+        norm["is_read"] = bool(overrides[mid])
+    return norm
 
 
 def _get_agent_manager():
@@ -382,16 +430,26 @@ def list_messages(
     page_size: int = 20,
     folder: str = "",
     cursor: str = "",
+    dir: str = "",
+    unread_only: bool = False,
+    has_attachments: bool = False,
 ) -> Dict[str, Any]:
     """列出邮箱消息（agently-cli message +list）。
 
-    支持分页游标（cursor）与文件夹过滤（folder: inbox/sent/trash/spam）。
+    支持分页游标（cursor）、文件夹过滤（dir: inbox/sent/trash/spam）、
+    仅未读（unread_only）、仅含附件（has_attachments）。
+    folder 为兼容旧参数，等价于 dir。
     """
     page = max(1, int(page or 1))
     page_size = max(1, min(50, int(page_size or 20)))
+    folder = dir or folder
     args = ["message", "+list", "--limit", str(page_size)]
     if folder:
         args += ["--dir", str(folder)]
+    if unread_only:
+        args.append("--is-unread")
+    if has_attachments:
+        args.append("--has-attachments")
     if cursor:
         args += ["--cursor", str(cursor)]
     result = _run_cli(args)
@@ -414,7 +472,7 @@ def read_message(message_id: str) -> Dict[str, Any]:
     # 剥掉 CLI 的 {ok, data} 包装
     if isinstance(data, dict) and "data" in data and "ok" in data:
         data = data.get("data")
-    return _ok(_normalize_message(data))
+    return _ok(_apply_local_flags(_normalize_message(data)))
 
 
 def search_messages(
@@ -423,15 +481,27 @@ def search_messages(
     page_size: int = 20,
     folder: str = "",
     cursor: str = "",
+    dir: str = "",
+    unread_only: bool = False,
+    has_attachments: bool = False,
 ) -> Dict[str, Any]:
-    """搜索邮件（agently-cli message +search --q）。"""
+    """搜索邮件（agently-cli message +search --q）。
+
+    支持文件夹过滤（dir）、仅未读（unread_only）、仅含附件（has_attachments）。
+    folder 为兼容旧参数，等价于 dir。
+    """
     if not query:
         return _err("缺少搜索关键词 query", "INVALID_ARGUMENT")
     page = max(1, int(page or 1))
     page_size = max(1, min(50, int(page_size or 20)))
+    folder = dir or folder
     args = ["message", "+search", "--q", str(query), "--limit", str(page_size)]
     if folder:
         args += ["--dir", str(folder)]
+    if unread_only:
+        args.append("--is-unread")
+    if has_attachments:
+        args.append("--has-attachments")
     if cursor:
         args += ["--cursor", str(cursor)]
     result = _run_cli(args)
@@ -450,15 +520,20 @@ def send_message(
     attachments: Any = None,
     confirmation_token: str = "",
     confirmed: bool = False,
+    cc: Any = None,
+    bcc: Any = None,
 ) -> Dict[str, Any]:
     """发送新邮件（agently-cli message +send）。
 
     attachments：附件路径列表（相对 _attachments_dir() 目录，可传单个字符串）。
+    cc/bcc：抄送/密送地址（list 或逗号分隔字符串）。
     写操作：需要 confirmation-token；用户已授权时可传 confirmed=True 免除。
     """
     if not to:
         return _err("缺少收件人 to", "INVALID_ARGUMENT")
     args = ["message", "+send", "--to", str(to)]
+    _append_addr_args(args, "--cc", cc)
+    _append_addr_args(args, "--bcc", bcc)
     if subject:
         args += ["--subject", str(subject)]
     if body:
@@ -473,14 +548,22 @@ def reply_message(
     attachments: Any = None,
     confirmation_token: str = "",
     confirmed: bool = False,
+    cc: Any = None,
+    bcc: Any = None,
+    reply_all: bool = False,
 ) -> Dict[str, Any]:
     """回复某封邮件（agently-cli message +reply --id）。
 
     attachments：附件路径列表（相对 _attachments_dir() 目录，可传单个字符串）。
+    cc/bcc：额外抄送/密送地址。reply_all：回复全部原收件人（--reply-all）。
     """
     if not message_id:
         return _err("缺少 message_id", "INVALID_ARGUMENT")
     args = ["message", "+reply", "--id", str(message_id)]
+    if reply_all:
+        args.append("--reply-all")
+    _append_addr_args(args, "--cc", cc)
+    _append_addr_args(args, "--bcc", bcc)
     if body:
         args += ["--body", str(body)]
     _append_attachment_args(args, attachments)
@@ -495,17 +578,22 @@ def forward_message(
     include_attachments: bool = False,
     confirmation_token: str = "",
     confirmed: bool = False,
+    cc: Any = None,
+    bcc: Any = None,
 ) -> Dict[str, Any]:
     """转发某封邮件（agently-cli message +forward --id --to）。
 
     attachments：额外附件路径列表（相对 _attachments_dir() 目录）。
     include_attachments：是否携带原邮件附件（--include-attachments）。
+    cc/bcc：抄送/密送地址（list 或逗号分隔字符串）。
     """
     if not message_id:
         return _err("缺少 message_id", "INVALID_ARGUMENT")
     if not to:
         return _err("缺少收件人 to", "INVALID_ARGUMENT")
     args = ["message", "+forward", "--id", str(message_id), "--to", str(to)]
+    _append_addr_args(args, "--cc", cc)
+    _append_addr_args(args, "--bcc", bcc)
     if body:
         args += ["--body", str(body)]
     if include_attachments:
@@ -544,6 +632,94 @@ def _apply_confirmation(
     return _run_cli(args, cwd=cwd)
 
 
+def set_starred(message_id: str, starred: bool = True) -> Dict[str, Any]:
+    """设置/取消邮件星标（本地存储，CLI 无星标能力）。"""
+    if not message_id:
+        return _err("缺少 message_id", "INVALID_ARGUMENT")
+    with _LOCK:
+        starred_list = _load_starred()
+        if starred:
+            if message_id not in starred_list:
+                starred_list.append(message_id)
+        else:
+            starred_list = [m for m in starred_list if m != message_id]
+        _save_starred(starred_list)
+    return _ok({"message_id": message_id, "starred": bool(starred)}, "星标已更新")
+
+
+def list_starred() -> Dict[str, Any]:
+    """列出全部星标邮件 ID。"""
+    return _ok(_load_starred())
+
+
+def _set_unread_override(message_ids: List[str], is_read: bool) -> None:
+    with _LOCK:
+        overrides = _load_unread_overrides()
+        for mid in message_ids:
+            overrides[mid] = is_read
+        _save_unread_overrides(overrides)
+
+
+def batch_message_action(
+    message_ids: Any,
+    action: str,
+    confirmation_token: str = "",
+    confirmed: bool = False,
+) -> Dict[str, Any]:
+    """批量操作邮件（对齐主流客户端多选操作）。
+
+    action：
+    - trash / delete：移入回收站 / 永久删除（写操作，需 confirmed 或 confirmation-token）
+    - read / unread：标记已读 / 未读（本地覆盖，CLI 无此能力）
+    - star / unstar：加星 / 取消星（本地存储）
+    返回 {action, total, succeeded, failed: [{message_id, error}]}。
+    """
+    if isinstance(message_ids, str):
+        ids = [m.strip() for m in message_ids.replace(";", ",").split(",") if m.strip()]
+    elif isinstance(message_ids, (list, tuple)):
+        ids = [str(m).strip() for m in message_ids if str(m or "").strip()]
+    else:
+        ids = []
+    if not ids:
+        return _err("缺少 message_ids", "INVALID_ARGUMENT")
+    if action not in ("trash", "delete", "read", "unread", "star", "unstar"):
+        return _err("action 必须是 trash/delete/read/unread/star/unstar", "INVALID_ARGUMENT")
+
+    succeeded = 0
+    failed: List[Dict[str, str]] = []
+
+    if action in ("read", "unread"):
+        _set_unread_override(ids, action == "read")
+        return _ok({"action": action, "total": len(ids), "succeeded": len(ids), "failed": []})
+
+    if action in ("star", "unstar"):
+        with _LOCK:
+            starred_list = _load_starred()
+            if action == "star":
+                for mid in ids:
+                    if mid not in starred_list:
+                        starred_list.append(mid)
+            else:
+                starred_list = [m for m in starred_list if m not in ids]
+            _save_starred(starred_list)
+        return _ok({"action": action, "total": len(ids), "succeeded": len(ids), "failed": []})
+
+    # trash / delete：逐封调用 CLI，单封失败不影响其余
+    cli_action = "+trash" if action == "trash" else "+delete"
+    for mid in ids:
+        args = ["message", cli_action, "--id", mid]
+        result = _apply_confirmation(args, confirmation_token, confirmed)
+        if result.get("success"):
+            succeeded += 1
+        else:
+            failed.append(
+                {"message_id": mid, "error": result.get("error", {}).get("message", "")}
+            )
+    data = {"action": action, "total": len(ids), "succeeded": succeeded, "failed": failed}
+    if failed and not succeeded:
+        return _err(f"批量{action}全部失败：{failed[0]['error']}", "BATCH_FAILED")
+    return _ok(data, f"批量{action}完成：成功 {succeeded}/{len(ids)}")
+
 # ---------------------------------------------------------------------------
 # 附件
 # ---------------------------------------------------------------------------
@@ -573,6 +749,25 @@ def _append_attachment_args(args: List[str], attachments: Any) -> None:
         if os.path.isabs(att):
             continue
         args += ["--attachment", att]
+
+
+def _append_addr_args(args: List[str], flag: str, addrs: Any) -> None:
+    """把地址列表拼接到 CLI 参数（--cc/--bcc，可重复）。
+
+    addrs 支持 list 或逗号/分号分隔字符串；空值忽略。
+    """
+    if not addrs:
+        return
+    if isinstance(addrs, str):
+        items = addrs.replace(";", ",").split(",")
+    elif isinstance(addrs, (list, tuple)):
+        items = list(addrs)
+    else:
+        items = [addrs]
+    for addr in items:
+        addr = str(addr or "").strip()
+        if addr:
+            args += [flag, addr]
 
 
 def upload_attachment(filename: str, data: str) -> Dict[str, Any]:
@@ -1432,6 +1627,10 @@ PUBLIC_FUNCTIONS: List[str] = [
     "forward_message",
     "trash_message",
     "delete_message",
+    # 星标与批量操作
+    "set_starred",
+    "list_starred",
+    "batch_message_action",
     # 附件
     "upload_attachment",
     "download_attachment",
