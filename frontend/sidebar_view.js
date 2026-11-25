@@ -744,7 +744,8 @@ export default {
     this.loadMessages();
   },
   template: `
-  <div class="agent-mail-sidebar" style="height:100%;overflow-y:auto;">
+  <div class="agent-mail-sidebar" style="height:100%;position:relative;display:flex;flex-direction:column;">
+   <div style="flex:1;min-height:0;overflow-y:auto;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <strong>📬 Agent Mail</strong>
       <span style="display:flex;gap:6px;align-items:center;">
@@ -758,7 +759,6 @@ export default {
       <button :style="tab==='pending'?btnPrimary:btnBase" @click="switchTab('pending')">待确认</button>
     </div>
     <div v-if="error" class="jarvis-alert" style="color:var(--color-error);font-size:12px;margin-bottom:8px;">{{ error }}</div>
-    <div v-if="loading" style="color:var(--color-text-secondary);font-size:12px;">加载中…</div>
 
     <div v-if="tab==='inbox'">
       <!-- 写信 / 回复 / 转发 -->
@@ -927,6 +927,11 @@ export default {
         </div>
       </div>
     </div>
+   </div>
+   <!-- 底部加载提示：绝对定位浮层，不占据布局空间，避免列表上下跳动 -->
+   <div v-if="loading" style="position:absolute;left:0;right:0;bottom:0;padding:4px 8px;background:var(--color-bg-tertiary);border-top:1px solid var(--color-border-subtle);color:var(--color-text-secondary);font-size:11px;text-align:center;pointer-events:none;">
+     加载中…
+   </div>
   </div>
   `,
 };
