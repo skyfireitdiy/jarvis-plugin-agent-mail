@@ -6,13 +6,31 @@
 
 const PLUGIN = "agent-mail";
 
-// 文件夹定义（dir 与 agently-cli --dir 一致）
+// 文件夹定义（dir 与 agently-cli --dir 一致；all 为收件箱+已发送合并视图）
 const FOLDERS = [
+  { dir: "all", label: "全部" },
   { dir: "inbox", label: "收件箱" },
   { dir: "sent", label: "已发送" },
   { dir: "trash", label: "回收站" },
   { dir: "spam", label: "垃圾邮件" },
 ];
+// 合并视图对应的 CLI 目录（CLI --dir 只接受单值，由后端逐个拉取合并）
+const MERGED_DIRS = { all: "inbox,sent" };
+// 目录名规范化：CLI 的 dir 可能是 {dir_name} 对象
+function dirName(m) {
+  const d = m && m.dir;
+  if (d && typeof d === "object") return String(d.dir_name || d.name || "");
+  return String(d || "");
+}
+// 判断是否为自己发出的邮件（用于会话内区分收发）
+function isOutgoing(m) {
+  const d = dirName(m);
+  if (d === "sent") return true;
+  if (d === "inbox") return false;
+  const self = String((m && m.__self_email) || "").toLowerCase();
+  const from = String((m && (m.from_email || m.from)) || "").toLowerCase();
+  return !!self && !!from && self === from;
+}
 
 // 规范化主题：去掉 Re:/Fw:/Fwd:/回复:/转发: 等前缀（可重复嵌套），用于会话归组
 function normalizeSubject(subject) {
@@ -28,8 +46,14 @@ function normalizeSubject(subject) {
   return s;
 }
 // 会话归组：同主题（去前缀）视为一个会话
+// 联系人取「对方」：自己发出的取收件人，收到的取发件人
 function threadContact(m) {
-  return (m && m.from_email) || (m && m.from) || (m && m.sender) || "未知";
+  if (!m) return "未知";
+  if (isOutgoing(m)) {
+    const to = addrToString(m.to);
+    if (to) return to;
+  }
+  return m.from_email || m.from || m.sender || "未知";
 }
 function threadKey(m) {
   return normalizeSubject(m.subject);
@@ -157,8 +181,8 @@ export default {
       loading: false,
       error: "",
       tab: "inbox", // inbox / history / pending
-      // 收件箱
-      folder: "inbox",
+      // 收件箱（默认「全部」= 收件箱+已发送合并视图）
+      folder: "all",
       messages: [],
       selected: null,
       page: 1,
@@ -222,6 +246,8 @@ export default {
         msgs.sort((a, b) =>
           String(a.created_at || "").localeCompare(String(b.created_at || "")),
         );
+        // 标记每封邮件的收发方向（合并视图下用于区分）
+        for (const m of msgs) m.outgoing = isOutgoing(m);
         const latest = msgs[msgs.length - 1];
         list.push({
           key,
@@ -230,6 +256,7 @@ export default {
           messages: msgs,
           count: msgs.length,
           latest,
+          outgoing: latest.outgoing === true,
           unread: msgs.some((m) => m.is_read === false),
           starred: msgs.some((m) => m.starred === true),
         });
@@ -257,6 +284,12 @@ export default {
   methods: {
     fmtTime,
     addrToString,
+    isOutgoing,
+    // 收发方向徽标样式（发=蓝色，收=灰色）
+    dirBadgeStyle(outgoing) {
+      const color = outgoing ? "var(--color-accent)" : "var(--color-text-secondary)";
+      return `display:inline-block;padding:0 4px;margin-right:4px;border:1px solid ${color};border-radius:3px;font-size:10px;line-height:14px;color:${color};flex-shrink:0;`;
+    },
     isThreadExpanded(key) {
       return this.expandedThreads[key] === true;
     },
@@ -281,7 +314,7 @@ export default {
         const payload = await callFunction("list_messages", {
           page: this.page,
           page_size: this.pageSize,
-          dir: this.folder,
+          dir: MERGED_DIRS[this.folder] || this.folder,
           unread_only: this.unreadOnly,
         });
         const data = payload.data || {};
@@ -342,7 +375,7 @@ export default {
           query: this.searchQuery.trim(),
           page: this.page,
           page_size: this.pageSize,
-          dir: this.folder,
+          dir: MERGED_DIRS[this.folder] || this.folder,
           unread_only: this.unreadOnly,
         });
         const data = payload.data || {};
@@ -784,7 +817,7 @@ export default {
           <button :style="btnDanger" @click="quickDelete">永久删除</button>
         </div>
         <div style="border:1px solid var(--color-border);border-radius:6px;padding:8px;font-size:12px;">
-          <div><strong>{{ selected.subject || '（无主题）' }}</strong></div>
+          <div><strong>{{ selected.subject || '（无主题）' }}</strong> <span :style="dirBadgeStyle(isOutgoing(selected))">{{ isOutgoing(selected) ? '已发送' : '已接收' }}</span></div>
           <div style="color:var(--color-text-secondary);">发件人：{{ selected.from_name ? (selected.from_name + ' <' + selected.from_email + '>') : (selected.sender || selected.from || '未知') }}</div>
           <div v-if="selected.to && selected.to.length" style="color:var(--color-text-secondary);">收件人：{{ addrToString(selected.to) }}</div>
           <div v-if="selected.cc && selected.cc.length" style="color:var(--color-text-secondary);">抄送：{{ addrToString(selected.cc) }}</div>
@@ -845,6 +878,7 @@ export default {
                 <span v-if="t.latest.has_attachments" style="font-size:10px;">📎</span>
               </div>
               <div style="font-size:11px;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                <span :style="dirBadgeStyle(t.outgoing)">{{ t.outgoing ? '发' : '收' }}</span>
                 {{ t.contact }} · {{ (t.latest.snippet || t.latest.body || '').slice(0, 60) }}
               </div>
             </div>
@@ -857,7 +891,8 @@ export default {
               <span @click.stop="toggleStar(m)" style="cursor:pointer;font-size:12px;" :style="m.starred ? 'color:#f5a623;' : 'color:var(--color-text-secondary);'">{{ m.starred ? '★' : '☆' }}</span>
               <div style="min-width:0;flex:1;cursor:pointer;" @click="openMessage(m)">
                 <div :style="m.is_read===false ? 'font-size:11px;font-weight:bold;' : 'font-size:11px;'" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                  {{ m.from_name || m.sender || m.from || '未知' }}
+                  <span :style="dirBadgeStyle(m.outgoing)">{{ m.outgoing ? '发' : '收' }}</span>
+                  {{ m.outgoing ? ('→ ' + addrToString(m.to)) : (m.from_name || m.sender || m.from || '未知') }}
                   <span v-if="m.has_attachments" style="font-size:10px;">📎</span>
                 </div>
                 <div style="font-size:11px;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ (m.snippet || m.body || '').slice(0, 80) }}</div>

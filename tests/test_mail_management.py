@@ -154,7 +154,63 @@ check("batch delete 传 confirmation-token",
 check("batch 非法 action 报错", not api.batch_message_action(["x"], "bogus").get("success"))
 check("batch 空 ids 报错", not api.batch_message_action([], "read").get("success"))
 
-# ---------- 场景 6：PUBLIC_FUNCTIONS ----------
+# ---------- 场景 6：多目录合并（收件箱+已发送） ----------
+_multi_calls = []
+
+
+def fake_multi(args, timeout=60, cwd=None):
+    _multi_calls.append(list(args))
+    d = "sent" if "sent" in args else "inbox"
+    return {
+        "success": True,
+        "data": {
+            "data": [
+                {
+                    "message_id": "m-" + d,
+                    "subject": "同一主题",
+                    "created_at": "2026-11-02T00:00:00Z" if d == "sent" else "2026-11-01T00:00:00Z",
+                    "dir": {"dir_id": 3 if d == "sent" else 1, "dir_name": d},
+                    "from": {"email": "me@x.com" if d == "sent" else "peer@x.com"},
+                    "to": [{"email": "peer@x.com"}],
+                },
+                {
+                    "message_id": "dup",
+                    "subject": "重复",
+                    "created_at": "2026-11-01T00:00:00Z",
+                    "dir": {"dir_name": d},
+                    "from": {"email": "z@x.com"},
+                    "to": [],
+                },
+            ],
+            "pagination": {"has_more": False},
+        },
+    }
+
+
+api._run_cli = fake_multi  # type: ignore
+res = api.list_messages(dir="inbox,sent", page_size=20)
+msgs = res["data"]["messages"]
+ids = [m["id"] for m in msgs]
+check("多目录合并成功", res.get("success"))
+check("多目录逐个调用 CLI", len(_multi_calls) == 2)
+check("多目录按目录分别传 --dir",
+      [_multi_calls[i][_multi_calls[i].index("--dir") + 1] for i in range(2)] == ["inbox", "sent"])
+check("多目录合并去重", ids.count("dup") == 1 and len(ids) == 3, str(ids))
+check("多目录按时间倒序", msgs[0]["created_at"] >= msgs[-1]["created_at"])
+check("消息 dir 规范为文件夹名", msgs[0]["dir"] in ("inbox", "sent") and isinstance(msgs[0]["dir"], str))
+check("合并结果含收与发两种 dir", {m["dir"] for m in msgs} == {"inbox", "sent"})
+
+_multi_calls.clear()
+res = api.list_messages(dir="inbox", cursor="CUR1")
+check("单目录保留 cursor 透传", "--cursor" in _multi_calls[-1])
+
+_multi_calls.clear()
+api.search_messages("hi", dir="inbox,sent")
+check("search 多目录逐个调用", len(_multi_calls) == 2 and all("--q" in c for c in _multi_calls))
+
+api._run_cli = fake_run_cli  # type: ignore
+
+# ---------- 场景 7：PUBLIC_FUNCTIONS ----------
 for fn in ("set_starred", "list_starred", "batch_message_action"):
     check(f"PUBLIC_FUNCTIONS 含 {fn}", fn in api.PUBLIC_FUNCTIONS)
 

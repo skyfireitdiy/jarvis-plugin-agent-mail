@@ -210,6 +210,13 @@ def _run_cli(args: List[str], timeout: int = 60, cwd: Optional[str] = None) -> D
     return _err(f"{hint}：{detail}", code_name)
 
 
+def _dir_name(value: Any) -> str:
+    """把 CLI 的 dir 字段规范成文件夹名（兼容 {dir_name} 对象与字符串）。"""
+    if isinstance(value, dict):
+        return str(value.get("dir_name") or value.get("name") or "")
+    return str(value or "")
+
+
 def _normalize_message(raw: Any) -> Dict[str, Any]:
     """把 agently-cli 原始消息结构转成前端友好的统一结构。
 
@@ -253,7 +260,7 @@ def _normalize_message(raw: Any) -> Dict[str, Any]:
         "is_read": bool(raw.get("is_read", False)),
         "has_attachments": bool(raw.get("has_attachments", False)),
         "attachments": attachments,
-        "dir": raw.get("dir", ""),
+        "dir": _dir_name(raw.get("dir", "")),
     }
     # 保留原始字段，便于前端/Agent 使用
     for k, v in raw.items():
@@ -425,6 +432,70 @@ def get_mailbox() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _split_dirs(folder: str) -> List[str]:
+    """拆分文件夹参数，支持逗号/分号分隔的多目录（如 inbox,sent）。"""
+    return [d.strip() for d in str(folder or "").replace(";", ",").split(",") if d.strip()]
+
+
+def _fetch_messages(
+    dirs: List[str],
+    page_size: int,
+    unread_only: bool,
+    has_attachments: bool,
+    query: str = "",
+    cursor: str = "",
+) -> Dict[str, Any]:
+    """按目录拉取消息并合并。
+
+    agently-cli 的 --dir 只接受单值（重复传只取最后一个），因此多目录时
+    逐个目录调用再合并、去重、按时间倒序。单目录时保留 cursor 分页语义。
+    返回 {messages, next_cursor, has_more} 或 {error}。
+    """
+    base = ["message", "+search", "--q", str(query)] if query else ["message", "+list"]
+    base += ["--limit", str(page_size)]
+    if unread_only:
+        base.append("--is-unread")
+    if has_attachments:
+        base.append("--has-attachments")
+
+    # 单目录：直接透传，保留游标分页
+    if len(dirs) <= 1:
+        args = list(base)
+        if dirs:
+            args += ["--dir", dirs[0]]
+        if cursor:
+            args += ["--cursor", str(cursor)]
+        result = _run_cli(args)
+        if not result.get("success"):
+            return {"error": result}
+        return _parse_message_list(result)
+
+    # 多目录：逐个拉取后合并（多目录下 cursor 无意义，忽略）
+    merged: List[Dict[str, Any]] = []
+    first_error: Optional[Dict[str, Any]] = None
+    for d in dirs:
+        result = _run_cli(list(base) + ["--dir", d])
+        if not result.get("success"):
+            if first_error is None:
+                first_error = result
+            continue
+        merged.extend(_parse_message_list(result).get("messages", []))
+    if first_error is not None and not merged:
+        return {"error": first_error}
+
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for m in merged:
+        mid = str(m.get("id") or m.get("message_id") or "")
+        if mid:
+            if mid in seen:
+                continue
+            seen.add(mid)
+        unique.append(m)
+    unique.sort(key=lambda m: str(m.get("created_at") or ""), reverse=True)
+    return {"messages": unique, "next_cursor": "", "has_more": False}
+
+
 def list_messages(
     page: int = 1,
     page_size: int = 20,
@@ -436,29 +507,32 @@ def list_messages(
 ) -> Dict[str, Any]:
     """列出邮箱消息（agently-cli message +list）。
 
-    支持分页游标（cursor）、文件夹过滤（dir: inbox/sent/trash/spam）、
-    仅未读（unread_only）、仅含附件（has_attachments）。
-    folder 为兼容旧参数，等价于 dir。
+    支持分页游标（cursor）、文件夹过滤（dir: inbox/sent/trash/spam，
+    可用逗号分隔多个目录如 "inbox,sent" 合并展示）、仅未读（unread_only）、
+    仅含附件（has_attachments）。folder 为兼容旧参数，等价于 dir。
     """
     page = max(1, int(page or 1))
     page_size = max(1, min(50, int(page_size or 20)))
-    folder = dir or folder
-    args = ["message", "+list", "--limit", str(page_size)]
-    if folder:
-        args += ["--dir", str(folder)]
-    if unread_only:
-        args.append("--is-unread")
-    if has_attachments:
-        args.append("--has-attachments")
-    if cursor:
-        args += ["--cursor", str(cursor)]
-    result = _run_cli(args)
-    if not result.get("success"):
-        return result
-    parsed = _parse_message_list(result)
-    parsed["page"] = page
-    parsed["page_size"] = page_size
-    return _ok(parsed)
+    dirs = _split_dirs(dir or folder)
+    fetched = _fetch_messages(
+        dirs, page_size, unread_only, has_attachments, cursor=cursor
+    )
+    if fetched.get("error"):
+        return fetched["error"]
+    messages = fetched.get("messages", [])
+    # 多目录合并结果已在内存中，按 page 切片
+    if len(dirs) > 1:
+        start = (page - 1) * page_size
+        messages = messages[start : start + page_size]
+    return _ok(
+        {
+            "messages": messages,
+            "next_cursor": fetched.get("next_cursor", ""),
+            "has_more": bool(fetched.get("has_more", False)),
+            "page": page,
+            "page_size": page_size,
+        }
+    )
 
 
 def read_message(message_id: str) -> Dict[str, Any]:
@@ -487,30 +561,33 @@ def search_messages(
 ) -> Dict[str, Any]:
     """搜索邮件（agently-cli message +search --q）。
 
-    支持文件夹过滤（dir）、仅未读（unread_only）、仅含附件（has_attachments）。
+    支持文件夹过滤（dir，可用逗号分隔多个目录合并搜索）、
+    仅未读（unread_only）、仅含附件（has_attachments）。
     folder 为兼容旧参数，等价于 dir。
     """
     if not query:
         return _err("缺少搜索关键词 query", "INVALID_ARGUMENT")
     page = max(1, int(page or 1))
     page_size = max(1, min(50, int(page_size or 20)))
-    folder = dir or folder
-    args = ["message", "+search", "--q", str(query), "--limit", str(page_size)]
-    if folder:
-        args += ["--dir", str(folder)]
-    if unread_only:
-        args.append("--is-unread")
-    if has_attachments:
-        args.append("--has-attachments")
-    if cursor:
-        args += ["--cursor", str(cursor)]
-    result = _run_cli(args)
-    if not result.get("success"):
-        return result
-    parsed = _parse_message_list(result)
-    parsed["page"] = page
-    parsed["page_size"] = page_size
-    return _ok(parsed)
+    dirs = _split_dirs(dir or folder)
+    fetched = _fetch_messages(
+        dirs, page_size, unread_only, has_attachments, query=query, cursor=cursor
+    )
+    if fetched.get("error"):
+        return fetched["error"]
+    messages = fetched.get("messages", [])
+    if len(dirs) > 1:
+        start = (page - 1) * page_size
+        messages = messages[start : start + page_size]
+    return _ok(
+        {
+            "messages": messages,
+            "next_cursor": fetched.get("next_cursor", ""),
+            "has_more": bool(fetched.get("has_more", False)),
+            "page": page,
+            "page_size": page_size,
+        }
+    )
 
 
 def send_message(
